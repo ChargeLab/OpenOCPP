@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            margin: 0;
+            font-family: Trebuchet MS, Tahoma, Arial, Helvetica, sans-serif;
+        }
+
+        .topnav {
+            overflow: hidden;
+            background-color: #333;
+        }
+
+        .topnav a {
+            float: left;
+            color: #f2f2f2;
+            text-align: center;
+            padding: 14px 16px;
+            text-decoration: none;
+            font-size: 17px;
+        }
+
+        .topnav a:hover {
+            background-color: #ddd;
+            color: black;
+        }
+
+        .topnav a.active {
+            background-color: #04AA6D;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+
+<div class="topnav">
+    <a id="href_setup" class="mylink" href="#" onclick=loadSetup()>Setup</a>
+    <a id="href_config" class="mylink" href="#" onclick=loadConfig()>Configuration</a>
+    <a id="href_control" class="mylink" href="#" onclick=loadControl()>Control</a>
+</div>
+
+<div id="content" style="padding-left:16px">
+</div>
+
+<script>
+    addSetLinkActiveEvents();
+    document.getElementById('href_setup').click();
+
+    function addSetLinkActiveEvents() {
+        const links = document.querySelectorAll(".mylink");
+        if (links.length) {
+            links.forEach((link) => {
+                link.addEventListener('click', (e) => {
+                    links.forEach((link) => {
+                        link.classList.remove('active');
+                    });
+                    e.preventDefault();
+                    link.classList.add('active');
+                });
+            });
+        }
+    }
+
+    function loadConfig() {
+        fetch("/config")
+            .then(response => response.text())
+            .then(text => {
+                document.getElementById("content").innerHTML = text;
+                executeScriptElements(document.getElementById("content"));
+                document.title = "Charger Simulator - Configuration";
+            })
+            .catch(error => {
+                document.getElementById("content").innerHTML = error;
+            });
+    }
+    function loadControl() {
+        fetch("/control")
+            .then(response => response.text())
+            .then(text => {
+                document.getElementById("content").innerHTML = text;
+                executeScriptElements(document.getElementById("content"));
+                document.title = "Charger Simulator - Control";
+            })
+            .catch(error => {
+                document.getElementById("content").innerHTML = error;
+            });
+    }
+    function loadSetup() {
+        fetch("/setup")
+            .then(response => response.text())
+            .then(text => {
+                document.getElementById("content").innerHTML = text;
+                executeScriptElements(document.getElementById("content"));
+                document.title = "Charger Simulator - Setup";
+            })
+            .catch(error => {
+                document.getElementById("content").innerHTML = error;
+            });
+    }
+
+    function executeScriptElements(containerElement) {
+        const scriptElements = containerElement.querySelectorAll("script");
+
+        Array.from(scriptElements).forEach((scriptElement) => {
+            const clonedElement = document.createElement("script");
+
+            Array.from(scriptElement.attributes).forEach((attribute) => {
+                clonedElement.setAttribute(attribute.name, attribute.value);
+            });
+
+            clonedElement.text = scriptElement.text;
+
+            scriptElement.parentNode.replaceChild(clonedElement, scriptElement);
+        });
+    }
+</script>
+
+</body>
+</html>

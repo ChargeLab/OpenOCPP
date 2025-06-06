@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html>
+<style>
+    .form-group {
+        margin-bottom: 10px;
+    }
+    .form-group label {
+        display: inline-block;
+        width: 280px; /* Adjust width as needed */
+    }
+    .form-group input {
+        width: 300px; /* Adjust width as needed */
+    }
+    .form-group input[type="checkbox"] {
+        width: auto; /* Let checkbox have natural width */
+    }
+</style>
+<body>
+<h2 id="myTitle">Charger Configuration</h2>
+<div>
+    <h3>Network Settings</h3>
+    <div class="form-group">
+        <label for="networkUrl">Central System URL (Slot 0):</label>
+        <input type="text" id="networkUrl" name="networkUrl" size="60">
+    </div>
+    <div class="form-group">
+        <label for="chargePointId">Charge Point ID:</label>
+        <input type="text" id="chargePointId" name="chargePointId" size="60">
+    </div>
+
+    <div class="form-group">
+        <label for="ocpp_protocol">OCPP Protocol:</label>
+        <select id="ocpp_protocol" name="ocpp_protocol">
+            <option value="OCPP 1.6" selected>OCPP 1.6</option>
+            <option value="OCPP 2.0.1">OCPP 2.0.1</option>
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label for="securityProfile">Security Profile:</label>
+        <input type="number" id="securityProfile" name="securityProfile" size="60">
+    </div>
+    <div class="form-group">
+        <label for="clearCertificates">Clear certificates:</label>
+        <input type="checkbox" id="clearCertificates" name="clearCertificates">
+    </div>
+</div>
+
+<div>
+    <h3>Device Settings</h3>
+    <div class="form-group">
+        <label for="serialNumber">Serial Number:</label>
+        <input type="text" id="serialNumber" name="serialNumber" size="40">
+    </div>
+    <div class="form-group">
+        <label for="maxCurrent">Device Maximum Current (amps):</label>
+        <input type="number" id="maxCurrent" name="maxCurrent" size="40">
+    </div>
+    <div class="form-group">
+        <label for="vendor">Vendor:</label>
+        <input type="text" id="vendor" name="vendor" size="40">
+    </div>
+    <div class="form-group">
+        <label for="model">Model:</label>
+        <input type="text" id="model" name="model" size="40">
+    </div>
+    <div class="form-group">
+        <label for="numberOfConnectors">Number of Connectors:</label>
+        <input type="number" id="numberOfConnectors" name="numberOfConnectors" size="40">
+    </div>
+</div>
+
+<br>
+<div>
+    <button onclick="submit()">Submit</button><br>
+    <p id="result" style="color:blue"> </p>
+</div>
+
+<hr>
+<div>
+    <h3>OCPP 1.6 Configuration</h3>
+
+    <div class="form-group">
+        <label for="ocpp1_6_parameter">Select an OCPP Parameter:</label>
+        <select id="ocpp1_6_parameter" name="ocpp1_6_parameter" onchange="onOcppParameterChanged()"></select>
+    </div>
+    <div class="form-group">
+        <label for="ocpp1_6_parameter_input">Value:</label>
+        <input type="text" id="ocpp1_6_parameter_input">
+    </div>
+    <div class="form-group">
+        <label>OCPP Parameter Read-Only:</label>
+        <span id="ocpp-parameter-readonly-status">-</span>
+    </div>
+
+    <br>
+    <div>
+        <button id="ocpp1_6_submit_button" onclick="submitOcpp1_6_ParameterChange()">Submit Parameter Change</button>
+        <p id="ocpp1_6_submit_result" style="color:blue"> </p>
+    </div>
+</div>
+
+
+
+<script>
+    window.ocppParametersMap = window.ocppParametersMap || new Map();
+
+    fetchAndFillSettings();
+    fetchAndFillOcpp1_6_Parameter();
+
+    function fetchAndFillSettings() {
+        fetch("getDeviceConfiguration")
+            .then(response => response.json())
+            .then(payload => {
+                document.getElementById("networkUrl").value = payload.centralSystemUrl;
+                document.getElementById("chargePointId").value = payload.chargePointId;
+
+                let normalizedOcppProtocol = null;
+
+                if (payload.ocppProtocol != null) {
+                    normalizedOcppProtocol = payload.ocppProtocol.replace(/^"(.*)"$/, "$1");
+                }
+
+                if (normalizedOcppProtocol == null || normalizedOcppProtocol === "OCPP20") {
+                    document.getElementById("ocpp_protocol").value = "OCPP 2.0.1";
+                } else {
+                    document.getElementById("ocpp_protocol").value = "OCPP 1.6";
+                }
+
+                document.getElementById("securityProfile").value = payload.securityProfile;
+                document.getElementById("serialNumber").value = payload.serialNumber;
+                document.getElementById("maxCurrent").value = payload.maxCurrentAmps;
+                document.getElementById("vendor").value = payload.vendor;
+                document.getElementById("model").value = payload.model;
+                document.getElementById("numberOfConnectors").value = payload.numberOfConnectors;
+
+                document.getElementById("myTitle").innerHTML = "Charger Configuration " + "(" + payload.firmwareVersion + ")";
+            });
+    }
+
+    function submit() {
+        var data = new Object();
+        data.centralSystemUrl = document.getElementById("networkUrl").value;
+        data.chargePointId = document.getElementById("chargePointId").value;
+        data.ocppProtocol = document.getElementById("ocpp_protocol").value === "OCPP 2.0.1" ? "OCPP20" : "OCPP16";
+        data.securityProfile = parseInt(document.getElementById("securityProfile").value);
+        data.clearCertificates = document.getElementById("clearCertificates").checked;
+        data.serialNumber = document.getElementById("serialNumber").value;
+        data.maxCurrentAmps = document.getElementById("maxCurrent").value;
+        data.vendor = document.getElementById("vendor").value;
+        data.model = document.getElementById("model").value;
+        data.numberOfConnectors = parseInt(document.getElementById("numberOfConnectors").value, 10);
+        data.firmwareVersion = "";
+
+        const jsonString = JSON.stringify(data);
+        console.log(jsonString);
+
+        fetch("updateDeviceConfiguration", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify(data)
+        }).then(response => response.json())
+            .then(json => {
+                if (json.successful === true)
+                    document.getElementById("result").innerHTML = "Configuration updated successfully";
+                else
+                    document.getElementById("result").innerHTML = "Configuration update failed";
+            })
+            .catch((error) => {
+                document.getElementById("result").innerHTML = "Configuration update failed:" + error;
+            });
+    }
+
+    function fetchAndFillOcpp1_6_Parameter() {
+        fetch("getOcppParameters")
+            .then(response => response.json())
+            .then(payload => {
+                const configKeys = payload?.rsp?.configurationKey;
+                if (!configKeys) {
+                    console.warn("No configuration keys found in response.");
+                    return;
+                }
+
+                configKeys.forEach(item => {
+                    window.ocppParametersMap.set(item.key, { value: item.value, readonly: item.readonly });
+                });
+
+                const select = document.getElementById("ocpp1_6_parameter");
+                select.innerHTML = Array.from(window.ocppParametersMap.keys())
+                    .map(key => `<option value="${key}">${key}</option>`)
+                    .join('');
+
+                onOcppParameterChanged();
+
+            })
+            .catch(e => {
+                console.error(e);
+            });
+    }
+
+    function onOcppParameterChanged() {
+        const selectedKey = document.getElementById("ocpp1_6_parameter").value;
+        const param = window.ocppParametersMap.get(selectedKey);
+
+        document.getElementById("ocpp1_6_parameter_input").value = param.value || "";
+        document.getElementById("ocpp-parameter-readonly-status").textContent = param.readonly ? "Yes (Read-Only)" : "No (Editable)";
+    }
+
+    async function submitOcpp1_6_ParameterChange() {
+        const selectedKey = document.getElementById("ocpp1_6_parameter").value;
+        const newValue = document.getElementById("ocpp1_6_parameter_input").value;
+
+        // Send data to server
+        try {
+            const response = await fetch('updateOcppParameter', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: selectedKey, value: newValue })
+            });
+
+            if (response.ok) {
+                const payload = await response.json();
+                console.log(`change ocpp parameter response: ${payload}`);
+
+                if (payload.status === "Accepted" || payload.status === "RebootRequired") {
+                    if (ocppParametersMap.has(selectedKey)) {
+                        window.ocppParametersMap.get(selectedKey).value = newValue;
+                    } else {
+                        console.warn(`Key ${selectedKey} not found in ocppParametersMap.`);
+                    }
+                }
+                document.getElementById("ocpp1_6_submit_result").innerHTML = `Get response with status: ${payload.status} for ${selectedKey} = ${newValue}`;
+            } else {
+                document.getElementById("ocpp1_6_submit_result").innerHTML = "Failed to update the ocpp variable value on server.";
+            }
+        } catch (error) {
+            console.error("Error submitting value:", error);
+            document.getElementById("ocpp1_6_submit_result").innerHTML = "An error occurred while updating the ocpp variable.";
+        }
+    }
+
+</script>
+
+</body>
+</html>

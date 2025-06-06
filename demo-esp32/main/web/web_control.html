@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        .left {
+            position: relative;
+            top: 10px;
+            left: 40px;
+            width: 800px;
+            border: 0px solid #73AD21;
+            padding: 0px;
+        }
+        .eighteen-point {line-height: 18pt;}
+        .li-position
+        {
+            left: 30px;
+            position: relative;
+        }
+        .flex-container {
+            display: flex;
+        }
+        .flex-child {
+            flex: 0.5;
+        }
+    </style>
+</head>
+<body>
+<div>
+    <h2>
+        <label style="color:green" for="connector_id">Connector Id:</label>
+        <select id="connector_id" name="connector_id" onchange="onConnectorIdChanged()">
+        </select>
+    </h2>
+</div>
+<div>
+    <h2>EV connection</h2>
+    <input onchange="updateChanges()" type="radio" id="ev_connected_false" name="ev_connected" checked>EV disconnected</input><br>
+    <input onchange="updateChanges()" type="radio" id="ev_connected_true" name="ev_connected">EV connected</input><br>
+
+    <h2>Suspended by EV</h2>
+    <input onchange="updateChanges()" type="radio" id="suspended_ev_true" name="suspended_ev" checked>Suspended by EV</input><br>
+    <input onchange="updateChanges()" type="radio" id="suspended_ev_false" name="suspended_ev">EV drawing power</input><br>
+
+    <h2>Suspended by charger</h2>
+    <input onchange="updateChanges()" type="radio" id="suspended_charger_true" name="suspended_charger" checked>Suspended by charger</input><br>
+    <input onchange="updateChanges()" type="radio" id="suspended_charger_false" name="suspended_charger">Charger delivering power</input><br>
+
+    <h2>RFID tap</h2>
+    <label for="rfid_token">Token:</label>
+    <input type="text" id="rfid_token" name="rfid_token" size="40"><br>
+
+    <label for="rfid_type">Type:</label>
+    <select name="rfid_type" id="rfid_type" style="margin-top: 10px">
+        <option value="Central">Central</option>
+        <option value="eMAID">eMAID</option>
+        <option value="ISO14443">ISO14443</option>
+        <option value="ISO15693">ISO15693</option>
+        <option value="KeyCode">KeyCode</option>
+        <option value="Local">Local</option>
+        <option value="MacAddress">MacAddress</option>
+        <option value="kNoAuthorization">kNoAuthorization</option>
+    </select>
+
+    <button onclick="onSendRFID()">Simulate RFID interaction</button><br>
+
+    <h2>Websocket connection</h2>
+    <input onchange="updateChanges()" type="radio" id="allow_websocket_connection_true" name="allow_websocket_connection" checked>Allow connection</input><br>
+    <input onchange="updateChanges()" type="radio" id="allow_websocket_connection_false" name="allow_websocket_connection">Disallow connection</input><br>
+</div>
+
+<br>
+<hr>
+<div class="flex-container">
+    <div class="flex-child">
+        <h2>Charging status</h2>
+        <label for="charging_status">Charging state:</label>
+        <strong id="charging_status" name="charging_status"></strong>
+    </div>
+</div>
+
+<br>
+<div>
+    <br>
+    <p id="message_result" style="color:blue"></p>
+</div>
+
+<script>
+    var simulateRfidRequest = null;
+    var updateConnectorSettingsRequest = null;
+    var lastStatusUpdate = null;
+
+    // document.body.addEventListener('change', function(e) {
+    //     if (e.target.id === "") {
+    //
+    //     }
+    //     if (e.target.type === "select-one") {
+    //         document.getElementById("message_result").innerHTML = "";
+    //         return;
+    //     }
+    //     updateChanges();
+    // });
+
+    setTimeout(() => {
+        fetch("getDeviceConfiguration", {signal: AbortSignal.timeout(1000)})
+            .then(response => response.text())
+            .then(text => {
+                let obj = JSON.parse(text);
+                let number_of_connectors = (obj || {})['numberOfConnectors'] || 0;
+                let connector_id_select = document.getElementById("connector_id");
+                for (let i = 0; i < number_of_connectors; i++) {
+                    connector_id_select.options[i] = new Option(i+1, i+1);
+                }
+            })
+            .then(() => {
+                setTimeout(fetchAndFill, 100);
+            })
+    }, 100);
+
+    function onConnectorIdChanged() {
+        lastStatusUpdate = null;
+    }
+
+    function updateBoolInput(name, value) {
+        if (value === true) {
+            if (!document.getElementById(name + "_true").checked) {
+                console.log("Setting: " + name + "_true");
+                document.getElementById(name + "_true").checked = true;
+            }
+        } else {
+            if (!document.getElementById(name + "_false").checked) {
+                console.log("Setting: " + name + "_false");
+                document.getElementById(name + "_false").checked = true;
+            }
+        }
+    }
+
+    function fetchAndFill() {
+        let future;
+        if (updateConnectorSettingsRequest != null) {
+            future = fetch("updateConnectorSettings", {
+                signal: AbortSignal.timeout(1000),
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify(updateConnectorSettingsRequest)
+            })
+                .then(()=>{
+                    document.getElementById("message_result").innerHTML = "The charger status was updated successfully.";
+                })
+                .catch(error => {
+                    document.getElementById("message_result").innerHTML = "The charger status was not updated due to error:" + error;
+                });
+
+            updateConnectorSettingsRequest = null;
+        } else if (simulateRfidRequest != null) {
+            future = fetch("simulateRfidInteraction", {
+                signal: AbortSignal.timeout(1000),
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify(simulateRfidRequest)
+            })
+                .then(()=>{
+                    document.getElementById("message_result").innerHTML = "RFID request accepted.";
+                })
+                .catch(error => {
+                    document.getElementById("message_result").innerHTML = "RFID request failed with error: " + error;
+                });
+
+            simulateRfidRequest = null;
+        } else if (lastStatusUpdate == null || Math.abs(Date.now() - lastStatusUpdate) > 2000) {
+            lastStatusUpdate = Date.now();
+
+            connector_id = document.getElementById("connector_id").value;
+            if (connector_id === null) {
+                connector_id = 1;
+            }
+            future = fetch("getConnectorStatus" + "?connectorId=" + connector_id, {signal: AbortSignal.timeout(1000)})
+                .then(response => response.text())
+                .then(text => {
+                    let obj = JSON.parse(text);
+
+                    let settings = (obj || {})['connectorSettings'] || {};
+
+                    updateBoolInput("ev_connected", settings['vehicleConnected']);
+                    updateBoolInput("suspended_ev", settings['suspendedByVehicle']);
+                    updateBoolInput("suspended_charger", settings['suspendedByCharger']);
+
+                    let charging_status = (obj || {})['chargePointStatus1_6'] || {};
+
+                    const chargingElement = document.getElementById('charging_status');
+                    if (charging_status === "ValueNotFoundInEnum") {
+                        chargingElement.innerHTML = "";
+                    } else {
+                        chargingElement.innerHTML = charging_status;
+
+                        // Set color based on charging_status
+                        switch (charging_status) {
+                            case "Charging":
+                                chargingElement.style.color = "green";
+                                break;
+                            case "Faulted":
+                                chargingElement.style.color = "red";
+                                break;
+                            case "Unavailable":
+                                chargingElement.style.color = "gray";
+                                break;
+                            default:
+                                chargingElement.style.color = "blue"; // Default color
+                                break;
+                        }
+                    }
+                });
+        } else {
+            future = Promise.resolve();
+        }
+
+        future.then(() => setTimeout(fetchAndFill, 100))
+            .catch(() => setTimeout(fetchAndFill, 100));
+    }
+
+    function updateChanges() {
+        updateConnectorSettingsRequest = {
+            connectorId: parseInt(document.getElementById("connector_id").value, 10),
+            vehicleConnected: document.getElementById("ev_connected_true").checked,
+            suspendedByVehicle: document.getElementById("suspended_ev_true").checked,
+            suspendedByCharger: document.getElementById("suspended_charger_true").checked,
+            allowWebsocketConnection: document.getElementById("allow_websocket_connection_true").checked
+        };
+    }
+
+    function onSendRFID() {
+        simulateRfidRequest = {
+            idToken: document.getElementById("rfid_token").value,
+            tokenType: document.getElementById("rfid_type").value
+        };
+    }
+
+</script>
+
+</body>
+</html>
