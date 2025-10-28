@@ -21,6 +21,8 @@
 #include "openocpp/protocol/ocpp2_0/handlers/ocpp_message_handler.h"
 
 #include "openocpp/implementation/hash_methods_mbedtls.h"
+#include "openocpp/interface/transaction_listener1_6.h"
+#include "openocpp/interface/transaction_listener2_0.h"
 
 namespace chargelab {
     class StandardCharger {
@@ -105,7 +107,8 @@ namespace chargelab {
                     notNull(power_management_module1_6),
                     notNull(pending_messages_module),
                     notNull(connector_status_module),
-                    notNull(station)
+                    notNull(station),
+                    nullptr  // TODO: will provide the transaction listener 1_6 from another moudle, e.g. for handling CTEP
             );
 
             message_handler1_6 = std::make_shared<ocpp1_6::OcppMessageHandler>(
@@ -143,7 +146,8 @@ namespace chargelab {
                     notNull(power_management_module2_0),
                     notNull(pending_messages_module),
                     notNull(connector_status_module),
-                    notNull(station)
+                    notNull(station),
+                    nullptr  // TODO: will provide the transaction listener 2_0 from another moudle, e.g. for handling CTEP
             );
 
             message_handler2_0 = std::make_shared<ocpp2_0::OcppMessageHandler>(
