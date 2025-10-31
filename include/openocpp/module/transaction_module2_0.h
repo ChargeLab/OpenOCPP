@@ -363,8 +363,8 @@ namespace chargelab {
                     if (transaction.first.has_value() && transaction.second.has_value()) {
                         transaction_listener_->onTransactionUpdate(
                             chargelab::TransactionListener2_0::Status::kRunning,
-                            transaction.first.value(), 
-                            transaction.second.value(), 
+                            transaction.first, // EVSEType
+                            transaction.second.value(), // TransactionContainer
                             station_->pollConnectorStatus(transaction.first.value()), 
                             std::nullopt);
                      }
@@ -775,7 +775,7 @@ namespace chargelab {
                 transaction_listener_->onTransactionUpdate(
                     chargelab::TransactionListener2_0::Status::kStarted,
                     evse, 
-                    active_transactions_[evse].value(),
+                    active_transactions_[evse].value(), // TransactionContainer
                     station_->pollConnectorStatus(evse.value()), 
                     original_meter_values);
             }
@@ -911,7 +911,7 @@ namespace chargelab {
                 transaction_listener_->onTransactionUpdate(
                     chargelab::TransactionListener2_0::Status::kPersistedStopCheckpoint,
                     evse, 
-                    active_transactions_[evse].value(),
+                    active_transactions_[evse].value(), // TransactionContainer
                     station_->pollConnectorStatus(evse.value()), 
                     final_values.original);
             }
@@ -1009,7 +1009,7 @@ namespace chargelab {
                 transaction_listener_->onTransactionUpdate(
                     chargelab::TransactionListener2_0::Status::kStopped,
                     evse, 
-                    active_transactions_[evse].value(),
+                    active_transactions_[evse].value(), // TransactionContainer
                     station_->pollConnectorStatus(evse.value()), 
                     final_values.original);
             }
