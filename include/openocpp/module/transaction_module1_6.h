@@ -10,6 +10,8 @@
 #include "openocpp/module/connector_status_module.h"
 #include "openocpp/common/operation_holder.h"
 #include "openocpp/common/logging.h"
+#include "openocpp/model/transaction_container1_6.h"
+#include "openocpp/interface/transaction_listener1_6.h"
 
 #include <utility>
 #include <random>
@@ -22,18 +24,6 @@
 
 namespace chargelab {
     namespace transaction_module1_6 {
-        struct TransactionContainer {
-            int connector_id;
-            uint64_t group_id;
-            std::string id_tag;
-            std::string start_transaction_request_id;
-
-            std::optional<int> transaction_id = std::nullopt;
-            std::optional<SteadyPointMillis> last_reading_timestamp = std::nullopt;
-            std::optional<SteadyPointMillis> last_clock_aligned_reading_timestamp = std::nullopt;
-            bool connector_unplugged_after_transaction_ended = false;
-        };
-
         struct PendingStartRequest {
             PendingStartRequest(std::shared_ptr<PlatformInterface> const& platform, int connector_id, std::string tag_id)
                 : created_timestamp {platform->steadyClockNow()},
@@ -85,13 +75,15 @@ namespace chargelab {
                 std::shared_ptr<PowerManagementModule1_6> power_management_module,
                 std::shared_ptr<PendingMessagesModule> pending_messages_module,
                 std::shared_ptr<ConnectorStatusModule> connector_status_module,
-                std::shared_ptr<StationInterface> station
+                std::shared_ptr<StationInterface> station,
+                std::shared_ptr<TransactionListener1_6> transaction_listener
         ) : platform_(platform),
             boot_notification_module_(std::move(boot_notification_module)),
             power_management_module_(std::move(power_management_module)),
             pending_messages_module_(std::move(pending_messages_module)),
             connector_status_module_(std::move(connector_status_module)),
-            station_(std::move(station))
+            station_(std::move(station)),
+            transaction_listener_(std::move(transaction_listener))
         {
             settings_ = platform_->getSettings();
 
@@ -203,6 +195,21 @@ namespace chargelab {
                 first_reading = !entry.second->last_clock_aligned_reading_timestamp.has_value();
                 if (shouldTakeReading(entry.second->last_clock_aligned_reading_timestamp, settings_->ClockAlignedDataInterval.getValue()))
                     addReading(entry.second.value(), first_reading ? ocpp1_6::ReadingContext::kTransactionBegin : ocpp1_6::ReadingContext::kSampleClock);
+            }           
+            
+            // Notify the listener if available
+            if (transaction_listener_ != nullptr) {
+                for (auto const& transaction : active_transactions_) {
+                    if (transaction.second.has_value()) {
+                        auto const connector_status = station_->pollConnectorStatus({transaction.first});
+                        transaction_listener_->onTransactionUpdate(
+                            chargelab::TransactionListener1_6::Status::kRunning,
+                            transaction.first, 
+                            transaction.second.value(), 
+                            connector_status, 
+                            std::nullopt);
+                     }
+                }
             }
 
 #if 0        // For OCTT _012
@@ -437,13 +444,26 @@ namespace chargelab {
                     connector_id,
                     group_id,
                     id_tag,
-                    start_transaction_request_id
+                    start_transaction_request_id,
+                    platform_->steadyClockNow()
             };
 
             power_management_module_->onActiveTransactionStarted(
                     connector_id,
                     charging_profile
             );
+
+            if (transaction_listener_ != nullptr) {
+                // reading meter values
+                auto sampled_values = station_->pollMeterValues1_6(evse.value());
+
+                transaction_listener_->onTransactionUpdate(
+                    chargelab::TransactionListener1_6::Status::kStarted,
+                    connector_id, 
+                    active_transactions_[connector_id].value(),
+                    status, 
+                    sampled_values);
+            }
         }
 
         std::optional<detail::PendingMessageWrapper> generateStopRequest(int connector_id, ocpp1_6::Reason const& reason) {
@@ -466,7 +486,7 @@ namespace chargelab {
                 return std::nullopt;
             }
 
-            return pending_messages_module_->generateRequest1_6(
+            auto pending_msg =  pending_messages_module_->generateRequest1_6(
                     ocpp1_6::StopTransactionReq {
                             transaction->id_tag,
                             (int)status->meter_watt_hours,
@@ -486,6 +506,19 @@ namespace chargelab {
                     }
             );
             power_management_module_->onActiveTransactionFinished(connector_id);
+            
+            if (transaction_listener_ != nullptr) {
+                auto sampled_values = station_->pollMeterValues1_6(evse.value());
+
+                transaction_listener_->onTransactionUpdate(
+                    chargelab::TransactionListener1_6::Status::kPersistedStopCheckpoint,
+                    connector_id, 
+                    active_transactions_[connector_id].value(),
+                    status, 
+                    sampled_values);
+            }
+
+            return pending_msg;
         }
 
         void stopTransaction(int connector_id, ocpp1_6::Reason const& reason) {
@@ -531,6 +564,18 @@ namespace chargelab {
                     }
             );
             power_management_module_->onActiveTransactionFinished(connector_id);
+
+            if (transaction_listener_ != nullptr) {
+                // reading meter values
+                auto sampled_values = station_->pollMeterValues1_6(evse.value());
+
+                transaction_listener_->onTransactionUpdate(
+                    chargelab::TransactionListener1_6::Status::kStopped,
+                    connector_id, 
+                    active_transactions_[connector_id].value(),
+                    status, 
+                    sampled_values);
+            }
         }
 
         void processRfidTap(std::string const& id_tag) {
@@ -740,6 +785,7 @@ namespace chargelab {
         std::shared_ptr<PendingMessagesModule> pending_messages_module_;
         std::shared_ptr<ConnectorStatusModule> connector_status_module_;
         std::shared_ptr<StationInterface> station_;
+        std::shared_ptr<TransactionListener1_6> transaction_listener_;
         std::shared_ptr<PendingMessagesModule::saved_message_supplier> stop_transaction_supplier_;
 
         std::shared_ptr<Settings> settings_;

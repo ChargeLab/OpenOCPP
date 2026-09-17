@@ -13,6 +13,8 @@
 #include "openocpp/helpers/set.h"
 #include "openocpp/protocol/ocpp2_0/types/tx_start_point_values.h"
 #include "openocpp/protocol/ocpp2_0/types/tx_stop_point_values.h"
+#include "openocpp/model/transaction_container2_0.h"
+#include "openocpp/interface/transaction_listener2_0.h"
 
 #include <utility>
 #include <random>
@@ -36,27 +38,6 @@ namespace chargelab {
      */
 
     namespace transaction_module2_0 {
-        struct TransactionContainer {
-            uint64_t transaction_id;
-            SteadyPointMillis start_ts;
-
-            std::optional<ocpp2_0::IdTokenType> id_token;
-            std::optional<ocpp2_0::IdTokenType> group_id_token;
-            std::string start_transaction_request_id;
-            std::optional<ocpp2_0::ChargingProfileType> charging_profile;
-            bool authorized;
-            bool deauthorized;
-            bool plugged_in;
-
-            SystemTimeMillis last_sampled_reading_timestamp;
-            SystemTimeMillis last_sampled_ended_meter_values_timestamp;
-            SystemTimeMillis last_clock_aligned_reading_timestamp;
-            SystemTimeMillis last_clock_aligned_ended_meter_values_timestamp;
-
-            std::optional<ocpp2_0::ChargingStateEnumType> last_charging_status = std::nullopt;
-            std::vector<ocpp2_0::MeterValueType> ended_meter_values {};
-        };
-
         struct PendingStartRequest {
             PendingStartRequest(std::shared_ptr<PlatformInterface> const& platform, std::optional<ocpp2_0::EVSEType> evse, ocpp2_0::IdTokenType id_token)
                 : created_timestamp {platform->steadyClockNow()},
@@ -97,6 +78,11 @@ namespace chargelab {
 
             bool authorize_finished;
         };
+
+        struct MeterValuesResult {
+            std::optional<std::vector<ocpp2_0::SampledValueType>> original;
+            std::optional<std::vector<ocpp2_0::MeterValueType>> filtered;
+        };
     }
 
     class TransactionModule2_0 : public ServiceStateful2_0 {
@@ -116,13 +102,15 @@ namespace chargelab {
                 std::shared_ptr<PowerManagementModule2_0> power_management_module,
                 std::shared_ptr<PendingMessagesModule> pending_messages_module,
                 std::shared_ptr<ConnectorStatusModule> connector_status_module,
-                std::shared_ptr<StationInterface> station
+                std::shared_ptr<StationInterface> station,
+                std::shared_ptr<TransactionListener2_0> transaction_listener
         ) : platform_(std::move(platform)),
             boot_notification_module_(std::move(boot_notification_module)),
             power_management_module_(std::move(power_management_module)),
             pending_messages_module_(std::move(pending_messages_module)),
             connector_status_module_(std::move(connector_status_module)),
             station_(std::move(station)),
+            transaction_listener_(std::move(transaction_listener)),
             random_engine_ {std::random_device{}()}
         {
             settings_ = platform_->getSettings();
@@ -322,13 +310,13 @@ namespace chargelab {
                                 settings_->MeterValuesAlignedData.getValue(),
                                 last_non_transaction_meter_value_trigger_
                         );
-                        if (!meter_values.has_value())
+                        if (!meter_values.filtered.has_value())
                             continue;
 
                         pending_messages_module_->sendRequest2_0(
                                 ocpp2_0::MeterValuesRequest {
                                         entry.first.id,
-                                        std::move(meter_values.value())
+                                        std::move(meter_values.filtered.value())
                                 },
                                 PendingMessagePolicy {
                                         PendingMessageType::kNotificationEvent,
@@ -367,6 +355,19 @@ namespace chargelab {
                     station_->setChargingEnabled(entry.first.value(), true);
                 } else {
                     station_->setChargingEnabled(entry.first.value(), false);
+                }
+            }
+
+            if (transaction_listener_ != nullptr) {
+                for (auto const& transaction : active_transactions_) {
+                    if (transaction.first.has_value() && transaction.second.has_value()) {
+                        transaction_listener_->onTransactionUpdate(
+                            chargelab::TransactionListener2_0::Status::kRunning,
+                            transaction.first, // EVSEType
+                            transaction.second.value(), // TransactionContainer
+                            station_->pollConnectorStatus(transaction.first.value()), 
+                            std::nullopt);
+                     }
                 }
             }
         }
@@ -690,13 +691,14 @@ namespace chargelab {
         }
 
     private:
-        transaction_module2_0::TransactionContainer& startTransaction(
+        chargelab::transaction_module2_0::TransactionContainer& startTransaction(
                 std::optional<ocpp2_0::EVSEType> evse,
                 std::optional<ocpp2_0::IdTokenType> const& id_token,
                 std::optional<ocpp2_0::IdTokenType> const& group_id_token,
                 ocpp2_0::TriggerReasonEnumType const& trigger_reason,
                 bool authorized,
                 SystemTimeMillis timestamp,
+                std::optional<std::vector<ocpp2_0::SampledValueType>> original_meter_values = std::nullopt,
                 std::optional<std::vector<ocpp2_0::MeterValueType>> meter_values = std::nullopt,
                 std::optional<ocpp2_0::ChargingProfileType> const& charging_profile = std::nullopt,
                 std::optional<int> const& remote_start_id = std::nullopt
@@ -719,7 +721,7 @@ namespace chargelab {
             if (aligned_interval_ended <= 0)
                 aligned_interval_ended = kMillisecondsInDay;
 
-            auto& active = active_transactions_[evse] = transaction_module2_0::TransactionContainer {
+            auto& active = active_transactions_[evse] = chargelab::transaction_module2_0::TransactionContainer {
                 transaction_id,
                 platform_->steadyClockNow(),
                 id_token,
@@ -754,7 +756,8 @@ namespace chargelab {
                             },
                             active->id_token,
                             evse,
-                            std::move(meter_values)
+                            std::move(meter_values),
+
                     },
                     PendingMessagePolicy {
                             PendingMessageType::kTransactionEvent,
@@ -767,6 +770,15 @@ namespace chargelab {
                             true
                     }
             );
+
+            if (transaction_listener_ != nullptr) {
+                transaction_listener_->onTransactionUpdate(
+                    chargelab::TransactionListener2_0::Status::kStarted,
+                    evse, 
+                    active_transactions_[evse].value(), // TransactionContainer
+                    station_->pollConnectorStatus(evse.value()), 
+                    original_meter_values);
+            }
 
             return active.value();
         }
@@ -820,7 +832,7 @@ namespace chargelab {
         }
 
         detail::PendingMessageWrapper generateStopRequest(
-                transaction_module2_0::TransactionContainer const& transaction,
+                chargelab::transaction_module2_0::TransactionContainer const& transaction,
                 std::optional<ocpp2_0::EVSEType> const& evse,
                 ocpp2_0::TriggerReasonEnumType const& trigger_reason,
                 ocpp2_0::ReasonEnumType const& stopped_reason,
@@ -849,15 +861,15 @@ namespace chargelab {
                     settings_->StopTxnSampledData.getValue(),
                     now
             );
-            if (final_values.has_value()) {
-                for (auto const &x : final_values.value())
+            if (final_values.filtered.has_value()) {
+                for (auto const &x : final_values.filtered.value())
                     meter_values->push_back(x);
             }
 
             if (meter_values->empty())
                 meter_values = std::nullopt;
 
-            return pending_messages_module_->generateRequest2_0(
+            auto pending_message = pending_messages_module_->generateRequest2_0(
                     ocpp2_0::TransactionEventRequest {
                             ocpp2_0::TransactionEventEnumType::kEnded,
                             now,
@@ -894,6 +906,17 @@ namespace chargelab {
                             true
                     }
             );
+
+            if (transaction_listener_ != nullptr) {
+                transaction_listener_->onTransactionUpdate(
+                    chargelab::TransactionListener2_0::Status::kPersistedStopCheckpoint,
+                    evse, 
+                    active_transactions_[evse].value(), // TransactionContainer
+                    station_->pollConnectorStatus(evse.value()), 
+                    final_values.original);
+            }
+
+            return pending_message;
         }
 
         void stopTransaction(
@@ -935,8 +958,8 @@ namespace chargelab {
                     settings_->StopTxnSampledData.getValue(),
                     now
             );
-            if (final_values.has_value()) {
-                for (auto const &x : final_values.value())
+            if (final_values.filtered.has_value()) {
+                for (auto const &x : final_values.filtered.value())
                     meter_values->push_back(x);
             }
 
@@ -981,6 +1004,15 @@ namespace chargelab {
                     }
             );
             active = std::nullopt;
+
+            if (transaction_listener_ != nullptr) {
+                transaction_listener_->onTransactionUpdate(
+                    chargelab::TransactionListener2_0::Status::kStopped,
+                    evse, 
+                    active_transactions_[evse].value(), // TransactionContainer
+                    station_->pollConnectorStatus(evse.value()), 
+                    final_values.original);
+            }
         }
 
         void processRfidTap(ocpp2_0::IdTokenType const& id_token) {
@@ -1027,7 +1059,7 @@ namespace chargelab {
 
         void deauthorizeTransaction(
                 std::optional<ocpp2_0::EVSEType> evse_id,
-                transaction_module2_0::TransactionContainer& transaction,
+                chargelab::transaction_module2_0::TransactionContainer& transaction,
                 ocpp2_0::TriggerReasonEnumType trigger_reason
         ) {
             if (evse_id.has_value()) {
@@ -1135,7 +1167,7 @@ namespace chargelab {
                                     ocpp2_0::ReadingContextEnumType::kTransaction_Begin,
                                     settings_->SampledDataTxStartedMeasurands.getValue(),
                                     now
-                            )
+                            ).filtered
                     );
 
                     // Allow PlugAndCharge to trigger a pending start request if not already authorized
@@ -1164,7 +1196,7 @@ namespace chargelab {
                                     ocpp2_0::ReadingContextEnumType::kTransaction_Begin,
                                     settings_->SampledDataTxStartedMeasurands.getValue(),
                                     now
-                            )
+                            ).filtered
                     );
 
                     // Allow PlugAndCharge to trigger a pending start request if not already authorized
@@ -1178,6 +1210,12 @@ namespace chargelab {
                     if (set::contains(start_points, ocpp2_0::TxStartPointValues::kEVConnected)) {
                         // Start transaction
                         auto const now = floorToSecond(platform_->systemClockNow());
+                        auto const meter_values = getMeterValues(
+                                    evse,
+                                    ocpp2_0::ReadingContextEnumType::kTransaction_Begin,
+                                    settings_->SampledDataTxStartedMeasurands.getValue(),
+                                    now
+                            );
                         auto const& result = startTransaction(
                                 evse,
                                 std::nullopt,
@@ -1185,13 +1223,9 @@ namespace chargelab {
                                 ocpp2_0::TriggerReasonEnumType::kCablePluggedIn,
                                 false,
                                 now,
+                                meter_values.original,
                                 // E01.FR.09
-                                getMeterValues(
-                                        evse,
-                                        ocpp2_0::ReadingContextEnumType::kTransaction_Begin,
-                                        settings_->SampledDataTxStartedMeasurands.getValue(),
-                                        now
-                                )
+                                meter_values.filtered
                         );
                         CHARGELAB_LOG_MESSAGE(info) << "Started new transaction (EVConnected) - transaction ID: " << result.transaction_id;
 
@@ -1337,6 +1371,12 @@ namespace chargelab {
                     }
 
                     auto const now = floorToSecond(platform_->systemClockNow());
+                    auto const meter_values = getMeterValues(
+                                    entry.first,
+                                    ocpp2_0::ReadingContextEnumType::kTransaction_Begin,
+                                    settings_->SampledDataTxStartedMeasurands.getValue(),
+                                    now
+                            );
                     auto const& result = startTransaction(
                             entry.first,
                             pending->id_token,
@@ -1344,13 +1384,9 @@ namespace chargelab {
                             start_reason,
                             true,
                             now,
+                            meter_values.original,
                             // E01.FR.09
-                            getMeterValues(
-                                    entry.first,
-                                    ocpp2_0::ReadingContextEnumType::kTransaction_Begin,
-                                    settings_->SampledDataTxStartedMeasurands.getValue(),
-                                    now
-                            ),
+                            meter_values.filtered,
                             pending->charging_profile,
                             pending->remote_start_id
                     );
@@ -1369,6 +1405,12 @@ namespace chargelab {
                     }
 
                     auto const now = floorToSecond(platform_->systemClockNow());
+                    auto const meter_values = getMeterValues(
+                                    entry.first,
+                                    ocpp2_0::ReadingContextEnumType::kTransaction_Begin,
+                                    settings_->SampledDataTxStartedMeasurands.getValue(),
+                                    now
+                            );
                     auto const& result = startTransaction(
                             entry.first,
                             pending->id_token,
@@ -1376,13 +1418,9 @@ namespace chargelab {
                             start_reason,
                             true,
                             now,
+                            meter_values.original,
                             // TODO: Should we be sending meter values here?
-                            getMeterValues(
-                                    entry.first,
-                                    ocpp2_0::ReadingContextEnumType::kTransaction_Begin,
-                                    settings_->SampledDataTxStartedMeasurands.getValue(),
-                                    now
-                            ),
+                            meter_values.filtered,
                             pending->charging_profile,
                             pending->remote_start_id
                     );
@@ -1412,6 +1450,7 @@ namespace chargelab {
                         true,
                         now,
                         std::nullopt,
+                        std::nullopt,
                         pending->charging_profile,
                         pending->remote_start_id
                 );
@@ -1424,7 +1463,7 @@ namespace chargelab {
         void addSampledReading(
                 SystemTimeMillis now,
                 std::optional<ocpp2_0::EVSEType> const& evse,
-                transaction_module2_0::TransactionContainer& entry,
+                chargelab::transaction_module2_0::TransactionContainer& entry,
                 ocpp2_0::TriggerReasonEnumType const& trigger_reason,
                 ocpp2_0::ReadingContextEnumType const& context,
                 std::string const& measurands
@@ -1452,7 +1491,7 @@ namespace chargelab {
                             },
                             std::nullopt,
                             evse,
-                            getMeterValues(evse, context, measurands, now)
+                            getMeterValues(evse, context, measurands, now).filtered
                     },
                     PendingMessagePolicy {
                             PendingMessageType::kTransactionEvent,
@@ -1469,11 +1508,11 @@ namespace chargelab {
         void addEndedReading(
                 SystemTimeMillis now,
                 std::optional<ocpp2_0::EVSEType> const& evse,
-                transaction_module2_0::TransactionContainer& entry,
+                chargelab::transaction_module2_0::TransactionContainer& entry,
                 ocpp2_0::ReadingContextEnumType const& context,
                 std::string const& measurands
         ) {
-            auto const meter_values = getMeterValues(evse, context, measurands, now);
+            auto const meter_values = getMeterValues(evse, context, measurands, now).filtered;
             if (!meter_values.has_value())
                 return;
 
@@ -1533,7 +1572,7 @@ namespace chargelab {
 
         ocpp2_0::ChargingStateEnumType getChargingState(
                 std::optional<ocpp2_0::EVSEType> evse_id,
-                transaction_module2_0::TransactionContainer& transaction
+                chargelab::transaction_module2_0::TransactionContainer& transaction
         ) {
             if (!evse_id.has_value())
                 return ocpp2_0::ChargingStateEnumType::kIdle;
@@ -1579,37 +1618,46 @@ namespace chargelab {
             return websocket->isConnected();
         }
 
-        std::optional<std::vector<ocpp2_0::MeterValueType>> getMeterValues(
+        transaction_module2_0::MeterValuesResult getMeterValues(
                 std::optional<ocpp2_0::EVSEType> const& evse,
                 ocpp2_0::ReadingContextEnumType const& context,
                 std::string const& measurands,
                 SystemTimeMillis now
         ) {
             if (!evse.has_value() || measurands.empty())
-                return std::nullopt;
+                return {};
 
             auto enabled = parseMeasurandsString(measurands);
             auto sampled_values = station_->pollMeterValues2_0(evse.value());
+            auto original_values = sampled_values;
+            for (auto& value : original_values)
+                value.context = context;
+
             sampled_values.erase(
-                    std::remove_if(
-                            sampled_values.begin(),
-                            sampled_values.end(),
-                            [&](ocpp2_0::SampledValueType const& value) {
-                                auto measurand = value.measurand.value_or(ocpp2_0::MeasurandEnumType::kEnergy_Active_Import_Register);
-                                return enabled.find(measurand) == enabled.end();
-                            }
-                    ),
-                    sampled_values.end()
+                std::remove_if(
+                    sampled_values.begin(),
+                    sampled_values.end(),
+                    [&](ocpp2_0::SampledValueType const& value) {
+                        auto measurand = value.measurand.value_or(ocpp2_0::MeasurandEnumType::kEnergy_Active_Import_Register);
+                        return enabled.find(measurand) == enabled.end();
+                    }
+                ),
+                sampled_values.end()
             );
 
             if (sampled_values.empty())
-                return std::nullopt;
+                return { original_values.empty() ? std::nullopt : std::make_optional(std::move(original_values)), std::nullopt };
 
             // Update the context
             for (auto& value : sampled_values)
                 value.context = context;
 
-            return std::vector<ocpp2_0::MeterValueType> {ocpp2_0::MeterValueType {now, sampled_values}};
+            return {
+                original_values.empty() ? std::nullopt : std::make_optional(std::move(original_values)),
+                std::vector<ocpp2_0::MeterValueType> {
+                    ocpp2_0::MeterValueType { now, std::move(sampled_values) }
+                }
+            };
         }
 
         std::set<ocpp2_0::TxStartPointValues> getStartPoints() {
@@ -1667,6 +1715,7 @@ namespace chargelab {
         std::shared_ptr<PendingMessagesModule> pending_messages_module_;
         std::shared_ptr<ConnectorStatusModule> connector_status_module_;
         std::shared_ptr<StationInterface> station_;
+        std::shared_ptr<TransactionListener2_0> transaction_listener_;
         std::default_random_engine random_engine_;
         std::shared_ptr<PendingMessagesModule::saved_message_supplier> stop_transaction_supplier_;
 
@@ -1678,7 +1727,7 @@ namespace chargelab {
         SystemTimeMillis last_non_transaction_meter_value_trigger_ = static_cast<SystemTimeMillis> (0);
 
         // Note: a transaction will remain here until the connector is unplugged or a new transaction starts
-        std::map<std::optional<ocpp2_0::EVSEType>, std::optional<transaction_module2_0::TransactionContainer>> active_transactions_;
+        std::map<std::optional<ocpp2_0::EVSEType>, std::optional<chargelab::transaction_module2_0::TransactionContainer>> active_transactions_;
     };
 }
 
