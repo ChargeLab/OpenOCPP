@@ -12,6 +12,7 @@
 #include "openocpp/common/logging.h"
 #include "openocpp/model/transaction_container1_6.h"
 #include "openocpp/interface/transaction_listener1_6.h"
+#include "openocpp/interface/authorization_listener1_6.h"
 
 #include <utility>
 #include <random>
@@ -76,14 +77,16 @@ namespace chargelab {
                 std::shared_ptr<PendingMessagesModule> pending_messages_module,
                 std::shared_ptr<ConnectorStatusModule> connector_status_module,
                 std::shared_ptr<StationInterface> station,
-                std::shared_ptr<TransactionListener1_6> transaction_listener
+                std::shared_ptr<TransactionListener1_6> transaction_listener,
+                std::shared_ptr<AuthorizationListener1_6> authorization_listener = nullptr
         ) : platform_(platform),
             boot_notification_module_(std::move(boot_notification_module)),
             power_management_module_(std::move(power_management_module)),
             pending_messages_module_(std::move(pending_messages_module)),
             connector_status_module_(std::move(connector_status_module)),
             station_(std::move(station)),
-            transaction_listener_(std::move(transaction_listener))
+            transaction_listener_(std::move(transaction_listener)),
+            authorization_listener_(std::move(authorization_listener))
         {
             settings_ = platform_->getSettings();
 
@@ -304,8 +307,17 @@ namespace chargelab {
                             entry.second = std::nullopt;
                             break;
                     }
+                    if (authorization_listener_) {
+                        authorization_listener_->onAuthorizationResult(value);
+                    }
                 } else {
-                    CHARGELAB_LOG_MESSAGE(warning) << "Error response to Authorize request: " << std::get<ocpp1_6::CallError> (rsp);
+                    const auto& error = std::get<ocpp1_6::CallError>(rsp);
+
+                    CHARGELAB_LOG_MESSAGE(warning) << "Error response to Authorize request: " << error;
+
+                    if (authorization_listener_) {
+                        authorization_listener_->onAuthorizationError(error);
+                    }
                 }
             }
         }
@@ -786,6 +798,7 @@ namespace chargelab {
         std::shared_ptr<ConnectorStatusModule> connector_status_module_;
         std::shared_ptr<StationInterface> station_;
         std::shared_ptr<TransactionListener1_6> transaction_listener_;
+        std::shared_ptr<AuthorizationListener1_6> authorization_listener_;
         std::shared_ptr<PendingMessagesModule::saved_message_supplier> stop_transaction_supplier_;
 
         std::shared_ptr<Settings> settings_;

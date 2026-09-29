@@ -24,6 +24,9 @@
 #include "openocpp/interface/transaction_listener1_6.h"
 #include "openocpp/interface/transaction_listener2_0.h"
 
+#include "openocpp/interface/charger_listeners1_6.h"
+#include "openocpp/interface/charger_listeners2_0.h"
+
 namespace chargelab {
     class StandardCharger {
     public:
@@ -58,7 +61,9 @@ namespace chargelab {
 
         StandardCharger(
                 std::shared_ptr<PlatformInterface> platform_interface,
-                std::shared_ptr<StationInterface> station_interface
+                std::shared_ptr<StationInterface> station_interface,
+                ChargerListeners1_6 charger_listeners1_6 = {},
+                ChargerListeners2_0 charger_listeners2_0 = {}
         )
                 : platform(std::move(platform_interface)),
                   station(std::move(station_interface))
@@ -92,7 +97,7 @@ namespace chargelab {
                             notNull(connector_status_module),
                             notNull(station)
             );
-
+            
             CHARGELAB_LOG_MESSAGE(info) << "Initializing OCPP 1.6 modules...";
             power_management_module1_6 = std::make_shared<PowerManagementModule1_6>(
                     notNull(settings),
@@ -108,7 +113,8 @@ namespace chargelab {
                     notNull(pending_messages_module),
                     notNull(connector_status_module),
                     notNull(station),
-                    nullptr  // TODO: will provide the transaction listener 1_6 from another moudle, e.g. for handling CTEP
+                    charger_listeners1_6.transaction_listener,
+                    charger_listeners1_6.authorization_listener
             );
 
             message_handler1_6 = std::make_shared<ocpp1_6::OcppMessageHandler>(
@@ -147,7 +153,8 @@ namespace chargelab {
                     notNull(pending_messages_module),
                     notNull(connector_status_module),
                     notNull(station),
-                    nullptr  // TODO: will provide the transaction listener 2_0 from another moudle, e.g. for handling CTEP
+                    charger_listeners2_0.transaction_listener,
+                    charger_listeners2_0.authorization_listener
             );
 
             message_handler2_0 = std::make_shared<ocpp2_0::OcppMessageHandler>(
