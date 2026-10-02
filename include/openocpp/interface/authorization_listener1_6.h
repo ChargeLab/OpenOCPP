@@ -22,11 +22,18 @@ namespace chargelab {
         /**
          * Called when an authorization result is available.
          *
+         * @param id_tag The ID tag from the original authorization request.
          * @param response The OCPP 1.6 Authorize response.
          */
-        virtual void onAuthorizationResult(const ocpp1_6::AuthorizeRsp& response) = 0;
+        virtual void onAuthorizationResult(const std::string& id_tag, const ocpp1_6::AuthorizeRsp& response) = 0;
 
-        virtual void onAuthorizationError(const ocpp1_6::CallError& error) = 0;
+        /**
+         * Called when an authorization error occurs.
+         *
+         * @param id_tag The ID tag from the original authorization request.
+         * @param error The OCPP 1.6 CALLERROR.
+         */
+        virtual void onAuthorizationError(const std::string& id_tag, const ocpp1_6::CallError& error) = 0;
     };
 
 }  // namespace chargelab

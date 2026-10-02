@@ -104,8 +104,8 @@ namespace chargelab {
                 std::shared_ptr<PendingMessagesModule> pending_messages_module,
                 std::shared_ptr<ConnectorStatusModule> connector_status_module,
                 std::shared_ptr<StationInterface> station,
-                std::shared_ptr<TransactionListener2_0> transaction_listener,
-                std::shared_ptr<AuthorizationListener2_0> authorization_listener = nullptr
+                std::weak_ptr<TransactionListener2_0> transaction_listener,
+                std::weak_ptr<AuthorizationListener2_0> authorization_listener = {}
         ) : platform_(std::move(platform)),
             boot_notification_module_(std::move(boot_notification_module)),
             power_management_module_(std::move(power_management_module)),
@@ -361,10 +361,10 @@ namespace chargelab {
                 }
             }
 
-            if (transaction_listener_ != nullptr) {
+            if (auto listener = transaction_listener_.lock()) {
                 for (auto const& transaction : active_transactions_) {
                     if (transaction.first.has_value() && transaction.second.has_value()) {
-                        transaction_listener_->onTransactionUpdate(
+                        listener->onTransactionUpdate(
                             chargelab::TransactionListener2_0::Status::kRunning,
                             transaction.first, // EVSEType
                             transaction.second.value(), // TransactionContainer
@@ -500,16 +500,16 @@ namespace chargelab {
                             entry.second = std::nullopt;
                             break;
                     }
-                    if (authorization_listener_ != nullptr) {
-                        authorization_listener_->onAuthorizationResult(value);
+                    if (auto listener = authorization_listener_.lock()) {
+                        listener->onAuthorizationResult(value);
                     }
                 } else {
                     auto error = std::get<ocpp2_0::CallError> (rsp);
 
                     CHARGELAB_LOG_MESSAGE(warning) << "Error response to Authorize request: " << error;
 
-                    if (authorization_listener_ != nullptr) {
-                        authorization_listener_->onAuthorizationError(error);
+                    if (auto listener = authorization_listener_.lock()) {
+                        listener->onAuthorizationError(error);
                     }
                 }
             }
@@ -783,8 +783,8 @@ namespace chargelab {
                     }
             );
 
-            if (transaction_listener_ != nullptr) {
-                transaction_listener_->onTransactionUpdate(
+            if (auto listener = transaction_listener_.lock()) {
+                listener->onTransactionUpdate(
                     chargelab::TransactionListener2_0::Status::kStarted,
                     evse, 
                     active_transactions_[evse].value(), // TransactionContainer
@@ -919,8 +919,8 @@ namespace chargelab {
                     }
             );
 
-            if (transaction_listener_ != nullptr) {
-                transaction_listener_->onTransactionUpdate(
+            if (auto listener = transaction_listener_.lock()) {
+                listener->onTransactionUpdate(
                     chargelab::TransactionListener2_0::Status::kPersistedStopCheckpoint,
                     evse, 
                     active_transactions_[evse].value(), // TransactionContainer
@@ -1017,8 +1017,8 @@ namespace chargelab {
             );
             active = std::nullopt;
 
-            if (transaction_listener_ != nullptr) {
-                transaction_listener_->onTransactionUpdate(
+            if (auto listener = transaction_listener_.lock()) {
+                listener->onTransactionUpdate(
                     chargelab::TransactionListener2_0::Status::kStopped,
                     evse, 
                     active_transactions_[evse].value(), // TransactionContainer
@@ -1727,8 +1727,8 @@ namespace chargelab {
         std::shared_ptr<PendingMessagesModule> pending_messages_module_;
         std::shared_ptr<ConnectorStatusModule> connector_status_module_;
         std::shared_ptr<StationInterface> station_;
-        std::shared_ptr<TransactionListener2_0> transaction_listener_;
-        std::shared_ptr<AuthorizationListener2_0> authorization_listener_;
+        std::weak_ptr<TransactionListener2_0> transaction_listener_;
+        std::weak_ptr<AuthorizationListener2_0> authorization_listener_;
         std::default_random_engine random_engine_;
         std::shared_ptr<PendingMessagesModule::saved_message_supplier> stop_transaction_supplier_;
 

@@ -77,8 +77,8 @@ namespace chargelab {
                 std::shared_ptr<PendingMessagesModule> pending_messages_module,
                 std::shared_ptr<ConnectorStatusModule> connector_status_module,
                 std::shared_ptr<StationInterface> station,
-                std::shared_ptr<TransactionListener1_6> transaction_listener,
-                std::shared_ptr<AuthorizationListener1_6> authorization_listener = nullptr
+                std::weak_ptr<TransactionListener1_6> transaction_listener,
+                std::weak_ptr<AuthorizationListener1_6> authorization_listener = {}
         ) : platform_(platform),
             boot_notification_module_(std::move(boot_notification_module)),
             power_management_module_(std::move(power_management_module)),
@@ -201,11 +201,11 @@ namespace chargelab {
             }           
             
             // Notify the listener if available
-            if (transaction_listener_ != nullptr) {
+            if (auto listener = transaction_listener_.lock()) {
                 for (auto const& transaction : active_transactions_) {
                     if (transaction.second.has_value()) {
                         auto const connector_status = station_->pollConnectorStatus({transaction.first});
-                        transaction_listener_->onTransactionUpdate(
+                        listener->onTransactionUpdate(
                             chargelab::TransactionListener1_6::Status::kRunning,
                             transaction.first, 
                             transaction.second.value(), 
@@ -307,16 +307,16 @@ namespace chargelab {
                             entry.second = std::nullopt;
                             break;
                     }
-                    if (authorization_listener_) {
-                        authorization_listener_->onAuthorizationResult(value);
+                    if (auto listener = authorization_listener_.lock()) {
+                        listener->onAuthorizationResult(entry.second->tag_id, value);
                     }
                 } else {
                     const auto& error = std::get<ocpp1_6::CallError>(rsp);
 
                     CHARGELAB_LOG_MESSAGE(warning) << "Error response to Authorize request: " << error;
 
-                    if (authorization_listener_) {
-                        authorization_listener_->onAuthorizationError(error);
+                    if (auto listener = authorization_listener_.lock()) {
+                        listener->onAuthorizationError(entry.second->tag_id, error);
                     }
                 }
             }
@@ -465,11 +465,11 @@ namespace chargelab {
                     charging_profile
             );
 
-            if (transaction_listener_ != nullptr) {
+            if (auto listener = transaction_listener_.lock()) {
                 // reading meter values
                 auto sampled_values = station_->pollMeterValues1_6(evse.value());
 
-                transaction_listener_->onTransactionUpdate(
+                listener->onTransactionUpdate(
                     chargelab::TransactionListener1_6::Status::kStarted,
                     connector_id, 
                     active_transactions_[connector_id].value(),
@@ -519,10 +519,10 @@ namespace chargelab {
             );
             power_management_module_->onActiveTransactionFinished(connector_id);
             
-            if (transaction_listener_ != nullptr) {
+            if (auto listener = transaction_listener_.lock()) {
                 auto sampled_values = station_->pollMeterValues1_6(evse.value());
 
-                transaction_listener_->onTransactionUpdate(
+                listener->onTransactionUpdate(
                     chargelab::TransactionListener1_6::Status::kPersistedStopCheckpoint,
                     connector_id, 
                     active_transactions_[connector_id].value(),
@@ -577,11 +577,11 @@ namespace chargelab {
             );
             power_management_module_->onActiveTransactionFinished(connector_id);
 
-            if (transaction_listener_ != nullptr) {
+            if (auto listener = transaction_listener_.lock()) {
                 // reading meter values
                 auto sampled_values = station_->pollMeterValues1_6(evse.value());
 
-                transaction_listener_->onTransactionUpdate(
+                listener->onTransactionUpdate(
                     chargelab::TransactionListener1_6::Status::kStopped,
                     connector_id, 
                     active_transactions_[connector_id].value(),
@@ -797,8 +797,8 @@ namespace chargelab {
         std::shared_ptr<PendingMessagesModule> pending_messages_module_;
         std::shared_ptr<ConnectorStatusModule> connector_status_module_;
         std::shared_ptr<StationInterface> station_;
-        std::shared_ptr<TransactionListener1_6> transaction_listener_;
-        std::shared_ptr<AuthorizationListener1_6> authorization_listener_;
+        std::weak_ptr<TransactionListener1_6> transaction_listener_;
+        std::weak_ptr<AuthorizationListener1_6> authorization_listener_;
         std::shared_ptr<PendingMessagesModule::saved_message_supplier> stop_transaction_supplier_;
 
         std::shared_ptr<Settings> settings_;

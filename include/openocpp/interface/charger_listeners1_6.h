@@ -14,8 +14,8 @@ namespace chargelab {
      * without changing OpenOCPP's normal business logic.
      */
     struct ChargerListeners1_6 {
-        std::shared_ptr<TransactionListener1_6> transaction_listener;
-        std::shared_ptr<AuthorizationListener1_6> authorization_listener;
+        std::weak_ptr<TransactionListener1_6> transaction_listener;
+        std::weak_ptr<AuthorizationListener1_6> authorization_listener;
     };
 
 }  // namespace chargelab
