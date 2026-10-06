@@ -13,6 +13,7 @@
 #include "openocpp/model/transaction_container1_6.h"
 #include "openocpp/interface/transaction_listener1_6.h"
 #include "openocpp/interface/authorization_listener1_6.h"
+#include "openocpp/interface/transaction_controller1_6.h"
 
 #include <utility>
 #include <random>
@@ -78,7 +79,8 @@ namespace chargelab {
                 std::shared_ptr<ConnectorStatusModule> connector_status_module,
                 std::shared_ptr<StationInterface> station,
                 std::weak_ptr<TransactionListener1_6> transaction_listener,
-                std::weak_ptr<AuthorizationListener1_6> authorization_listener = {}
+                std::weak_ptr<AuthorizationListener1_6> authorization_listener = {},
+                std::weak_ptr<TransactionController1_6> transaction_controller = {}
         ) : platform_(platform),
             boot_notification_module_(std::move(boot_notification_module)),
             power_management_module_(std::move(power_management_module)),
@@ -86,7 +88,8 @@ namespace chargelab {
             connector_status_module_(std::move(connector_status_module)),
             station_(std::move(station)),
             transaction_listener_(std::move(transaction_listener)),
-            authorization_listener_(std::move(authorization_listener))
+            authorization_listener_(std::move(authorization_listener)),
+            transaction_controller_(std::move(transaction_controller))
         {
             settings_ = platform_->getSettings();
 
@@ -212,6 +215,27 @@ namespace chargelab {
                             connector_status, 
                             std::nullopt);
                      }
+                }
+            }
+
+            // Check if any of the transactions has been stopped externally
+            if (auto controller = transaction_controller_.lock()) {
+                std::optional<std::pair<int, ocpp1_6::Reason>> externally_stopped_transaction;
+
+                for (const auto& [connector_id, transaction] : active_transactions_) {
+                    if (!transaction) {
+                        continue;
+                    }
+
+                    if (auto reason = controller->getTransactionStopReason(connector_id)) {
+                        externally_stopped_transaction = std::pair{connector_id, *reason};
+                        break;
+                    }
+                }
+                
+                if (externally_stopped_transaction) {
+                    const auto [connector_id, reason] = *externally_stopped_transaction;
+                    stopTransaction(connector_id, reason);
                 }
             }
 
@@ -586,7 +610,8 @@ namespace chargelab {
                     connector_id, 
                     active_transactions_[connector_id].value(),
                     status, 
-                    sampled_values);
+                    sampled_values,
+                    reason);
             }
         }
 
@@ -688,6 +713,12 @@ namespace chargelab {
                     continue;
                 if (active_transactions_[id].has_value())
                     continue;
+
+                if (auto controller = transaction_controller_.lock()) {
+                    if (!controller->isTransactionStartAllowed(id, pending->tag_id)) {
+                        continue;
+                    }
+                }
 
                 // Start new transaction
                 startTransaction(id, pending->tag_id, pending->charging_profile);
@@ -799,6 +830,7 @@ namespace chargelab {
         std::shared_ptr<StationInterface> station_;
         std::weak_ptr<TransactionListener1_6> transaction_listener_;
         std::weak_ptr<AuthorizationListener1_6> authorization_listener_;
+        std::weak_ptr<TransactionController1_6> transaction_controller_;
         std::shared_ptr<PendingMessagesModule::saved_message_supplier> stop_transaction_supplier_;
 
         std::shared_ptr<Settings> settings_;

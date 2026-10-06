@@ -18,7 +18,8 @@ namespace chargelab {
             int connector_id,
             transaction_module1_6::TransactionContainer const& transaction,
             std::optional<charger::ConnectorStatus> const& connector_status,
-            std::optional<std::vector<ocpp1_6::SampledValue>> const& sampled_values
+            std::optional<std::vector<ocpp1_6::SampledValue>> const& sampled_values,
+            std::optional<chargelab::ocpp1_6::Reason> reason
         ) override {
             if (status == TransactionListener1_6::Status::kRunning) {
                 auto now = system_->steadyClockNow();
