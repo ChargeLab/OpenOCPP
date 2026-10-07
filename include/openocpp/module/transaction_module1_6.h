@@ -294,6 +294,23 @@ namespace chargelab {
                 return ocpp1_6::RemoteStartTransactionRsp{ocpp1_6::RemoteStartStopStatus::kRejected};
             }
 
+            // No transaction may be started on an inoperative connector
+            bool operative_connector = false;
+            for (auto const& entry : station_->getConnectorMetadata()) {
+                auto const id = entry.second.connector_id1_6;
+                if (connector_id != 0 && connector_id != id)
+                    continue;
+
+                if (!connector_status_module_->isInoperative1_6(id)) {
+                    operative_connector = true;
+                    break;
+                }
+            }
+
+            if (!operative_connector) {
+                return ocpp1_6::RemoteStartTransactionRsp{ocpp1_6::RemoteStartStopStatus::kRejected};
+            }
+
             if (auto controller = transaction_controller_.lock()) {
                 if (!controller->onRemoteStartTransaction(req)) {
                     return ocpp1_6::RemoteStartTransactionRsp{ocpp1_6::RemoteStartStopStatus::kRejected};
@@ -639,6 +656,7 @@ namespace chargelab {
             bool found_available_connector = false;
             for (auto const& entry: station_->getConnectorMetadata()) {
                 if (entry.first.id == 0) continue;
+                if (connector_status_module_->isInoperative1_6(entry.second.connector_id1_6)) continue;
                 auto const connector_status = station_->pollConnectorStatus(entry.first);
                 if (!connector_status.has_value())
                     continue;
@@ -718,6 +736,8 @@ namespace chargelab {
                 if (!status.has_value() || !status->vehicle_connected)
                     continue;
                 if (active_transactions_[id].has_value())
+                    continue;
+                if (connector_status_module_->isInoperative1_6(id))
                     continue;
 
                 if (auto controller = transaction_controller_.lock()) {
