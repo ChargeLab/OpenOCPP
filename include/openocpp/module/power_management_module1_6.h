@@ -765,6 +765,7 @@ namespace chargelab {
                     ocpp1_6::ChargingRateUnitType::kA },
                                      now,
                                      [&](std::vector<detail::SchedulePeriod> const& periods, int duration) {
+                    bool published = false;
                     for (auto const& p : periods) {
                         if (p.endTime > time_now_seconds) {
                             shortest_duration = std::min(shortest_duration, p.endTime - std::max(p.startPeriod, time_now_seconds));
@@ -782,7 +783,18 @@ namespace chargelab {
                             } else {
                                 station_->setActiveEvseProfiles(connector, active_schedules);
                             }
+                            published = true;
                             break;
+                        }
+                    }
+
+                    // No current period (e.g. all profiles cleared or expired): tell the station there is no limit, so
+                    // it does not keep applying the last one
+                    if (!published) {
+                        if (connector == 0) {
+                            station_->setActiveChargePointMaxProfiles(std::vector<StationInterface::schedule_type1_6> {});
+                        } else {
+                            station_->setActiveEvseProfiles(connector, std::vector<StationInterface::schedule_type1_6> {});
                         }
                     }
                 });
