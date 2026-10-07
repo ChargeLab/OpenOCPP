@@ -7,6 +7,7 @@
 #include "openocpp/interface/transaction_controller1_6.h"
 #include "openocpp/interface/reset_controller1_6.h"
 #include "openocpp/interface/availability_controller1_6.h"
+#include "openocpp/interface/configuration_controller1_6.h"
 
 namespace chargelab {
 
@@ -22,6 +23,7 @@ namespace chargelab {
         std::weak_ptr<TransactionController1_6> transaction_controller;
         std::weak_ptr<ResetController1_6> reset_controller;
         std::weak_ptr<AvailabilityController1_6> availability_controller;
+        std::weak_ptr<ConfigurationController1_6> configuration_controller;
     };
 
 }  // namespace chargelab

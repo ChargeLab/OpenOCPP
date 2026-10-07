@@ -139,6 +139,15 @@ namespace chargelab {
             settings_->MessageFlushCounter.setValue(pending_messages_write_count_);
         }
 
+        /**
+         * Writes the pending messages to storage now, e.g. before this instance is destroyed without a restart of the
+         * system.
+         */
+        void flush() {
+            must_flush_to_disk_ = true;
+            flushToDisk();
+        }
+
         void registerOnSaveMessageSupplier(std::shared_ptr<saved_message_supplier> const& supplier) {
             for (auto const& x : saved_message_suppliers_) {
                 if (x == supplier) {

@@ -6,6 +6,7 @@
 #include "openocpp/common/settings.h"
 #include "openocpp/helpers/string.h"
 #include "openocpp/interface/component/system_interface.h"
+#include "openocpp/interface/configuration_controller1_6.h"
 
 #include <utility>
 #include <functional>
@@ -17,9 +18,14 @@ namespace chargelab {
         static constexpr int kOcpp20NotifyReportRequestOverheadBytes = 100;
 
     public:
-        explicit ConfigurationModule(std::shared_ptr<Settings> settings, std::shared_ptr<SystemInterface> system)
+        explicit ConfigurationModule(
+                std::shared_ptr<Settings> settings,
+                std::shared_ptr<SystemInterface> system,
+                std::weak_ptr<ConfigurationController1_6> configuration_controller1_6 = {}
+        )
             : settings_(std::move(settings)),
-              system_(std::move(system))
+              system_(std::move(system)),
+              configuration_controller1_6_(std::move(configuration_controller1_6))
         {
             assert(settings_ != nullptr);
             assert(system_ != nullptr);
@@ -302,7 +308,24 @@ namespace chargelab {
 
         std::optional<ocpp1_6::ResponseToRequest<ocpp1_6::ChangeConfigurationRsp>>
         onChangeConfigurationReq(const ocpp1_6::ChangeConfigurationReq& req) override {
-            return changeConfiguration(req, false);
+            auto const controller = configuration_controller1_6_.lock();
+            if (controller != nullptr) {
+                if (auto const status = controller->onChangeConfiguration(req))
+                    return ocpp1_6::ChangeConfigurationRsp {status.value()};
+            }
+
+            auto response = changeConfiguration(req, false);
+
+            if (controller != nullptr && response.has_value()) {
+                if (auto const* rsp = std::get_if<ocpp1_6::ChangeConfigurationRsp>(&response.value())) {
+                    if (rsp->status == ocpp1_6::ConfigurationStatus::kAccepted ||
+                        rsp->status == ocpp1_6::ConfigurationStatus::kRebootRequired) {
+                        controller->onConfigurationChanged(req, rsp->status);
+                    }
+                }
+            }
+
+            return response;
         }
 
         std::optional<ocpp1_6::ResponseToRequest<ocpp1_6::ChangeConfigurationRsp>>
@@ -343,6 +366,37 @@ namespace chargelab {
 
             // TODO: Move to 1_6 device model rather than id
             bool include_all_keys = req.key.value().empty();
+
+            // Keys the controller answers for take precedence over OpenOCPP settings with the same key
+            std::vector<ocpp1_6::KeyValue> controller_keys;
+            if (auto const controller = configuration_controller1_6_.lock()) {
+                controller->visitConfiguration([&](ocpp1_6::KeyValue const& key_value) {
+                    controller_keys.push_back(key_value);
+                });
+            }
+
+            auto const is_controller_key = [controller_keys](std::string const& key) {
+                return std::any_of(controller_keys.begin(), controller_keys.end(), [&](auto const& x) {
+                    return string::EqualsIgnoreCaseAscii(x.key.value(), key);
+                });
+            };
+
+            if (!include_all_keys) {
+                std::vector<ocpp1_6::KeyValue> requested_controller_keys;
+                for (auto const& key_value : controller_keys) {
+                    auto it = std::remove_if(unknown_keys.begin(), unknown_keys.end(), [&] (auto const& x) {
+                        return string::EqualsIgnoreCaseAscii(x.value(), key_value.key.value());
+                    });
+
+                    if (it != unknown_keys.end()) {
+                        requested_controller_keys.push_back(key_value);
+                        unknown_keys.erase(it, unknown_keys.end());
+                    }
+                }
+
+                controller_keys = std::move(requested_controller_keys);
+            }
+
             if (!unknown_keys.empty()) {
                 if ((int)req.key.value().size() > settings_->GetConfigurationMaxKeys.getValue()) {
                     return ocpp1_6::CallError {
@@ -372,10 +426,15 @@ namespace chargelab {
             auto settings = settings_;
             return ocpp1_6::GetConfigurationRsp {
                     {[=](std::function<void(ocpp1_6::KeyValue const &)> const &visitor) {
+                        for (auto const& key_value : controller_keys)
+                            visitor(key_value);
+
                         auto const& keys = include_keys;
                         settings->visitSettings([&](SettingBase const& setting) {
                             auto const metadata = setting.getMetadata();
                             if (!metadata.config.isAllowOcppRead() && !metadata.config.isAllowOcppWrite())
+                                return;
+                            if (is_controller_key(metadata.id))
                                 return;
 
                             std::string value;
@@ -513,6 +572,7 @@ namespace chargelab {
     private:
         std::shared_ptr<Settings> settings_;
         std::shared_ptr<SystemInterface> system_;
+        std::weak_ptr<ConfigurationController1_6> configuration_controller1_6_;
 
         std::optional<ocpp2_0::GetBaseReportRequest> ocpp2_0_pending_base_report_ = std::nullopt;
     };
