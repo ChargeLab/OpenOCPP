@@ -294,6 +294,12 @@ namespace chargelab {
                 return ocpp1_6::RemoteStartTransactionRsp{ocpp1_6::RemoteStartStopStatus::kRejected};
             }
 
+            if (auto controller = transaction_controller_.lock()) {
+                if (!controller->onRemoteStartTransaction(req)) {
+                    return ocpp1_6::RemoteStartTransactionRsp{ocpp1_6::RemoteStartStopStatus::kRejected};
+                }
+            }
+
             // Note: adopting the convention that a new RemoteStartTransaction request will replace an existing pending
             // one, rather than be blocked by it.
             pending_start_req_[connector_id] = transaction_module1_6::PendingStartRequest {platform_, req};
