@@ -87,7 +87,12 @@ namespace chargelab {
             heartbeat_module = std::make_shared<HeartbeatModule>(notNull(settings), notNull(platform));
             configuration_module = std::make_shared<ConfigurationModule>(notNull(settings), notNull(platform));
             fallback_module = std::make_shared<FallbackModule>(notNull(platform));
-            reset_module = std::make_shared<ResetModule>(notNull(settings), notNull(platform), notNull(connector_status_module));
+            reset_module = std::make_shared<ResetModule>(
+                    notNull(settings),
+                    notNull(platform),
+                    notNull(connector_status_module),
+                    charger_interfaces1_6.reset_controller
+            );
 
             // TODO: Maybe hash methods should move into platform?
             firmware_update_module = std::make_shared<FirmwareUpdateModule<HashMethodsMbedTLS>>(

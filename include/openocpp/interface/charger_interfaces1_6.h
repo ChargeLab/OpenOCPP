@@ -5,6 +5,7 @@
 #include "openocpp/interface/authorization_listener1_6.h"
 #include "openocpp/interface/transaction_listener1_6.h"
 #include "openocpp/interface/transaction_controller1_6.h"
+#include "openocpp/interface/reset_controller1_6.h"
 
 namespace chargelab {
 
@@ -18,6 +19,7 @@ namespace chargelab {
         std::weak_ptr<TransactionListener1_6> transaction_listener;
         std::weak_ptr<AuthorizationListener1_6> authorization_listener;
         std::weak_ptr<TransactionController1_6> transaction_controller;
+        std::weak_ptr<ResetController1_6> reset_controller;
     };
 
 }  // namespace chargelab
