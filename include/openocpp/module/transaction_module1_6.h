@@ -641,7 +641,7 @@ namespace chargelab {
                 listener->onTransactionUpdate(
                     chargelab::TransactionListener1_6::Status::kStopped,
                     connector_id, 
-                    active_transactions_[connector_id].value(),
+                    transaction.value(),
                     status, 
                     sampled_values,
                     reason);
