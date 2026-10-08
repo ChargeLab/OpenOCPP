@@ -222,6 +222,27 @@ namespace chargelab {
         }
 
         void runStep(ocpp1_6::OcppRemote &remote) override {
+            if (force_connector0_status1_6_ && !pending_connector_status_req_.operationInProgress()) {
+                force_connector0_status1_6_ = false;
+
+                ocpp1_6::StatusNotificationReq request {
+                        0,
+                        ocpp1_6::ChargePointErrorCode::kNoError,
+                        std::nullopt,
+                        isChargePointInoperative1_6() ? ocpp1_6::ChargePointStatus::kUnavailable : ocpp1_6::ChargePointStatus::kAvailable,
+                        ocpp1_6::DateTime{platform_->systemClockNow()},
+                        std::nullopt,
+                        std::nullopt
+                };
+
+                pending_connector_status_update1_6_ = std::nullopt;
+                pending_connector_status_req_.setWithTimeout(
+                        settings_->DefaultMessageTimeout.getValue(),
+                        remote.sendStatusNotificationReq(request)
+                );
+                return;
+            }
+
             for (auto& entry : station_->getConnectorMetadata()) {
                 auto const current_state = station_->pollConnectorStatus(entry.first);
                 if (!current_state.has_value())
@@ -305,6 +326,12 @@ namespace chargelab {
         onTriggerMessageReq(const ocpp1_6::TriggerMessageReq &req) override {
             if (req.requestedMessage != ocpp1_6::MessageTrigger::kStatusNotification)
                 return std::nullopt;
+
+            // Connector 0: the status of the charge point as a whole
+            if (req.connectorId == std::make_optional(0)) {
+                force_connector0_status1_6_ = true;
+                return ocpp1_6::TriggerMessageRsp {ocpp1_6::TriggerMessageStatus::kAccepted};
+            }
 
             bool found = false;
             for (auto const& entry : station_->getConnectorMetadata()) {
@@ -424,6 +451,21 @@ namespace chargelab {
         }
 
     private:
+        // The charge point as a whole is inoperative: made so through connector 0, or every connector is inoperative
+        bool isChargePointInoperative1_6() {
+            auto const it = inoperative_connectors_.find(std::nullopt);
+            if (it != inoperative_connectors_.end() && it->second)
+                return true;
+
+            auto const metadata = station_->getConnectorMetadata();
+            if (metadata.empty())
+                return false;
+
+            return std::all_of(metadata.begin(), metadata.end(), [&](auto const& entry) {
+                return isInoperative1_6(entry.second.connector_id1_6);
+            });
+        }
+
         // Whether any connector affected by an OCPP 1.6 request for connector_id (0 for all) is charging
         bool isCharging1_6(int connector_id) {
             for (auto const& entry : station_->getConnectorMetadata()) {
@@ -850,6 +892,8 @@ namespace chargelab {
         std::optional<std::pair<chargelab::ocpp2_0::EVSEType, ocpp2_0::StatusNotificationRequest>> pending_connector_status_update2_0_ = std::nullopt;
         std::optional<std::pair<chargelab::ocpp2_0::EVSEType, ocpp1_6::StatusNotificationReq>> pending_connector_status_update1_6_ = std::nullopt;
         std::map<chargelab::ocpp2_0::EVSEType, detail::ReportedConnectorStatus> reported_status_;
+        // A TriggerMessage requested the status of connector 0
+        bool force_connector0_status1_6_ = false;
         std::map<std::optional<chargelab::ocpp2_0::EVSEType>, bool> inoperative_connectors_;
         std::atomic<bool> pending_reset_ = false;
         std::atomic<bool> reset_reason_hard_ = false;   // hard reset or soft reset

@@ -445,17 +445,27 @@ namespace chargelab {
             if (req.requestedMessage != ocpp1_6::MessageTrigger::kMeterValues)
                 return std::nullopt;
 
-            for (auto& entry : active_transactions_) {
-                if (!entry.second.has_value())
-                    continue;
-                if (req.connectorId.has_value() && req.connectorId.value() != entry.first)
+            // For the requested connector, or all connectors if none was given: a transaction reading if a transaction
+            // is active, otherwise a reading without transaction
+            bool sent = false;
+            for (auto const& entry : station_->getConnectorMetadata()) {
+                auto const id = entry.second.connector_id1_6;
+                if (req.connectorId.has_value() && req.connectorId.value() != id)
                     continue;
 
-                addReading(entry.second.value(), ocpp1_6::ReadingContext::kTrigger);
-                return ocpp1_6::TriggerMessageRsp {ocpp1_6::TriggerMessageStatus::kAccepted};
+                auto& transaction = active_transactions_[id];
+                if (transaction.has_value()) {
+                    addReading(transaction.value(), ocpp1_6::ReadingContext::kTrigger);
+                } else {
+                    addIdleReading(id, entry.first, ocpp1_6::ReadingContext::kTrigger);
+                }
+                sent = true;
             }
 
-            return ocpp1_6::TriggerMessageRsp {ocpp1_6::TriggerMessageStatus::kRejected};
+            if (!sent)
+                return ocpp1_6::TriggerMessageRsp {ocpp1_6::TriggerMessageStatus::kRejected};
+
+            return ocpp1_6::TriggerMessageRsp {ocpp1_6::TriggerMessageStatus::kAccepted};
         }
 
     private:
@@ -762,23 +772,7 @@ namespace chargelab {
                 return;
             }
 
-            auto enabled = parseMeasurandsString(settings_->MeterValuesSampledData.getValue());
-            auto sampled_values = station_->pollMeterValues1_6(evse.value());
-            sampled_values.erase(
-                    std::remove_if(
-                            sampled_values.begin(),
-                            sampled_values.end(),
-                            [&](ocpp1_6::SampledValue const& value) {
-                                auto measurand = value.measurand.value_or(ocpp1_6::Measurand::kEnergyActiveImportRegister);
-                                return enabled.find(measurand) == enabled.end();
-                            }
-                    ),
-                    sampled_values.end()
-            );
-
-            // Update the context
-            for (auto& value : sampled_values)
-                value.context = context;
+            auto sampled_values = pollSampledValues(evse.value(), context);
 
             // TODO: It may be helpful to batch these while offline so that fewer requests are sent when the station
             //  reconnects instead of persisting individual samples.
@@ -803,6 +797,53 @@ namespace chargelab {
                             false
                     }
             );
+        }
+
+        // A MeterValues reading for a connector without an active transaction (e.g. for a TriggerMessage)
+        void addIdleReading(int connector_id, ocpp2_0::EVSEType const& evse, ocpp1_6::ReadingContext const& context) {
+            pending_messages_module_->sendRequest1_6(
+                    ocpp1_6::MeterValuesReq {
+                            connector_id,
+                            std::nullopt,
+                            {
+                                    ocpp1_6::MeterValue {
+                                            platform_->systemClockNow(),
+                                            pollSampledValues(evse, context)
+                                    }
+                            }
+                    },
+                    PendingMessagePolicy {
+                            PendingMessageType::kNotificationEvent,
+                            std::nullopt,
+                            settings_->NotificationMessageDefaultRetries.getValue(),
+                            settings_->NotificationMessageDefaultRetryInterval.getValue(),
+                            kPriorityMeterValue,
+                            false,
+                            false
+                    }
+            );
+        }
+
+        // The station's meter values for the measurands in MeterValuesSampledData, with the given context
+        std::vector<ocpp1_6::SampledValue> pollSampledValues(ocpp2_0::EVSEType const& evse, ocpp1_6::ReadingContext const& context) {
+            auto enabled = parseMeasurandsString(settings_->MeterValuesSampledData.getValue());
+            auto sampled_values = station_->pollMeterValues1_6(evse);
+            sampled_values.erase(
+                    std::remove_if(
+                            sampled_values.begin(),
+                            sampled_values.end(),
+                            [&](ocpp1_6::SampledValue const& value) {
+                                auto measurand = value.measurand.value_or(ocpp1_6::Measurand::kEnergyActiveImportRegister);
+                                return enabled.find(measurand) == enabled.end();
+                            }
+                    ),
+                    sampled_values.end()
+            );
+
+            for (auto& value : sampled_values)
+                value.context = context;
+
+            return sampled_values;
         }
 
         bool shouldTakeReading(std::optional<SteadyPointMillis>& last, int interval_seconds) {
