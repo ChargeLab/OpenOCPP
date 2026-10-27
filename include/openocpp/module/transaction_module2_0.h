@@ -15,6 +15,7 @@
 #include "openocpp/protocol/ocpp2_0/types/tx_stop_point_values.h"
 #include "openocpp/model/transaction_container2_0.h"
 #include "openocpp/interface/transaction_listener2_0.h"
+#include "openocpp/interface/transaction_controller2_0.h"
 #include "openocpp/interface/authorization_listener2_0.h"
 
 #include <utility>
@@ -105,7 +106,8 @@ namespace chargelab {
                 std::shared_ptr<ConnectorStatusModule> connector_status_module,
                 std::shared_ptr<StationInterface> station,
                 std::weak_ptr<TransactionListener2_0> transaction_listener,
-                std::weak_ptr<AuthorizationListener2_0> authorization_listener = {}
+                std::weak_ptr<AuthorizationListener2_0> authorization_listener = {},
+                std::weak_ptr<TransactionController2_0> transaction_controller = {}
         ) : platform_(std::move(platform)),
             boot_notification_module_(std::move(boot_notification_module)),
             power_management_module_(std::move(power_management_module)),
@@ -114,6 +116,7 @@ namespace chargelab {
             station_(std::move(station)),
             transaction_listener_(std::move(transaction_listener)),
             authorization_listener_(std::move(authorization_listener)),
+            transaction_controller_(std::move(transaction_controller)),
             random_engine_ {std::random_device{}()}
         {
             settings_ = platform_->getSettings();
@@ -442,6 +445,13 @@ namespace chargelab {
                 return ocpp2_0::RequestStartTransactionResponse{ocpp2_0::RequestStartStopStatusEnumType::kRejected};
             }
 
+            if (auto controller = transaction_controller_.lock()) {
+                if (!controller->onRequestStartTransaction(req)) {
+                    CHARGELAB_LOG_MESSAGE(info) << "Rejected RequestStartTransactionRequest - rejected by the controller";
+                    return ocpp2_0::RequestStartTransactionResponse{ocpp2_0::RequestStartStopStatusEnumType::kRejected};
+                }
+            }
+
             // Note: adopting the convention that a new RequestStartTransactionRequest request will replace an existing
             // pending one, rather than be blocked by it. This doesn't appear to be clear from the specification;
             // F02.FR.26 specifies what should happen here if there is already an *authorized transaction*, but does not
@@ -700,6 +710,24 @@ namespace chargelab {
             });
 
             return response;
+        }
+
+        // Stops the transaction on the connector for a reason outside of
+        // OpenOCPP, e.g. the charger it is run for stopped it. Returns false
+        // if there is none.
+        bool stopTransactionOnConnector(
+                ocpp2_0::EVSEType const& evse,
+                ocpp2_0::TriggerReasonEnumType const& trigger_reason,
+                ocpp2_0::ReasonEnumType const& stopped_reason,
+                std::optional<ocpp2_0::IdTokenType> id_token = std::nullopt
+        ) {
+            auto const it = active_transactions_.find(evse);
+            if (it == active_transactions_.end() || !it->second.has_value())
+                return false;
+
+            CHARGELAB_LOG_MESSAGE(info) << "Stopping transaction (external) - transaction ID: " << it->second->transaction_id;
+            stopTransaction(evse, trigger_reason, stopped_reason, std::move(id_token));
+            return true;
         }
 
     private:
@@ -1015,13 +1043,16 @@ namespace chargelab {
                             true
                     }
             );
+            // Keep the container for the listener: reading it back from
+            // active_transactions_ after it was reset throws.
+            auto const stopped_transaction = active.value();
             active = std::nullopt;
 
             if (auto listener = transaction_listener_.lock()) {
                 listener->onTransactionUpdate(
                     chargelab::TransactionListener2_0::Status::kStopped,
                     evse, 
-                    active_transactions_[evse].value(), // TransactionContainer
+                    stopped_transaction, // TransactionContainer
                     station_->pollConnectorStatus(evse.value()), 
                     final_values.original);
             }
@@ -1370,6 +1401,12 @@ namespace chargelab {
                         continue;
                 }
 
+                // The pending start request stays pending until the controller allows the start.
+                if (auto controller = transaction_controller_.lock()) {
+                    if (!controller->isTransactionStartAllowed(entry.first))
+                        continue;
+                }
+
                 if (set::contains(start_points, ocpp2_0::TxStartPointValues::kPowerPathClosed)) {
                     // Start using the kEVConnected PowerPathClosed, if configured
                     // Note - the pending start request would be authorized at this point
@@ -1445,6 +1482,11 @@ namespace chargelab {
             // If we weren't able to start an Authorized transaction against a plugged in connector, then start a
             // transaction without an assigned connector.
             if (set::contains(start_points, ocpp2_0::TxStartPointValues::kAuthorized)) {
+                if (auto controller = transaction_controller_.lock()) {
+                    if (!controller->isTransactionStartAllowed(pending->evse))
+                        return;
+                }
+
                 ocpp2_0::TriggerReasonEnumType start_reason;
                 if (pending->remote_start_id.has_value()) {
                     // F02.FR.21
@@ -1729,6 +1771,7 @@ namespace chargelab {
         std::shared_ptr<StationInterface> station_;
         std::weak_ptr<TransactionListener2_0> transaction_listener_;
         std::weak_ptr<AuthorizationListener2_0> authorization_listener_;
+        std::weak_ptr<TransactionController2_0> transaction_controller_;
         std::default_random_engine random_engine_;
         std::shared_ptr<PendingMessagesModule::saved_message_supplier> stop_transaction_supplier_;
 

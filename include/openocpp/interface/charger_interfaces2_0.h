@@ -17,7 +17,7 @@ namespace chargelab {
     struct ChargerInterfaces2_0 {
         std::weak_ptr<TransactionListener2_0> transaction_listener;
         std::weak_ptr<AuthorizationListener2_0> authorization_listener;
-        std::weak_ptr<TransactionController2_0> transacdtion_controller;
+        std::weak_ptr<TransactionController2_0> transaction_controller;
     };
 
 }  // namespace chargelab

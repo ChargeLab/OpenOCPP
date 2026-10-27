@@ -165,7 +165,8 @@ namespace chargelab {
                     notNull(connector_status_module),
                     notNull(station),
                     charger_interfaces2_0.transaction_listener,
-                    charger_interfaces2_0.authorization_listener
+                    charger_interfaces2_0.authorization_listener,
+                    charger_interfaces2_0.transaction_controller
             );
 
             message_handler2_0 = std::make_shared<ocpp2_0::OcppMessageHandler>(
