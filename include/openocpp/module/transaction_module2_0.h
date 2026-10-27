@@ -620,6 +620,9 @@ namespace chargelab {
                     continue;
 
                 CHARGELAB_LOG_MESSAGE(info) << "Stopping transaction (RequestStopTransactionReq) - transaction ID: " << entry.second->transaction_id;
+                if (auto controller = transaction_controller_.lock()) {
+                    controller->onRequestStopTransaction(entry.first);
+                }
                 stopTransaction(
                         entry.first,
                         ocpp2_0::TriggerReasonEnumType::kRemoteStop,

@@ -21,5 +21,8 @@ namespace chargelab {
         // Return false to reject it.
         virtual bool onRequestStartTransaction(const ocpp2_0::RequestStartTransactionRequest& request) = 0;
 
+        // The backend requested to stop the running transaction on the
+        // connector, which OpenOCPP is about to stop.
+        virtual void onRequestStopTransaction(const std::optional<ocpp2_0::EVSEType>& evse) = 0;
     };
 }
