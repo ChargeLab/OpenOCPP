@@ -96,7 +96,8 @@ namespace chargelab {
                     notNull(settings),
                     notNull(platform),
                     notNull(connector_status_module),
-                    charger_interfaces1_6.reset_controller
+                    charger_interfaces1_6.reset_controller,
+                    charger_interfaces2_0.reset_controller
             );
 
             // TODO: Maybe hash methods should move into platform?
