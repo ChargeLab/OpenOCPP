@@ -80,7 +80,8 @@ namespace chargelab {
                     notNull(settings),
                     notNull(platform),
                     notNull(station),
-                    charger_interfaces1_6.availability_controller
+                    charger_interfaces1_6.availability_controller,
+                    charger_interfaces2_0.availability_controller
             );
 
             get_logs_module = std::make_shared<GetLogsModule>(notNull(platform), notNull(pending_messages_module));

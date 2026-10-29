@@ -5,6 +5,7 @@
 #include "openocpp/interface/platform_interface.h"
 #include "openocpp/interface/station_interface.h"
 #include "openocpp/interface/availability_controller1_6.h"
+#include "openocpp/interface/availability_controller2_0.h"
 #include "openocpp/common/settings.h"
 #include "openocpp/common/logging.h"
 #include "openocpp/common/operation_holder.h"
@@ -32,12 +33,14 @@ namespace chargelab {
                 std::shared_ptr<Settings> settings,
                 std::shared_ptr<PlatformInterface> const& platform,
                 std::shared_ptr<StationInterface> station,
-                std::weak_ptr<AvailabilityController1_6> availability_controller1_6 = {}
+                std::weak_ptr<AvailabilityController1_6> availability_controller1_6 = {},
+                std::weak_ptr<AvailabilityController2_0> availability_controller2_0 = {}
         )
                 : settings_(std::move(settings)),
                   platform_(platform),
                   station_(std::move(station)),
                   availability_controller1_6_(std::move(availability_controller1_6)),
+                  availability_controller2_0_(std::move(availability_controller2_0)),
                   pending_connector_status_req_ {platform}
         {
             assert(platform_ != nullptr);
@@ -64,6 +67,32 @@ namespace chargelab {
 
             auto const evse = station_->lookupConnectorId1_6(connector_id);
             return evse.has_value() && is_set(evse);
+        }
+
+        /**
+         * Whether the OCPP 2.0.1 EVSE was made inoperative by ChangeAvailability: for the whole station, for the
+         * EVSE, or for each of its connectors.
+         */
+        bool isInoperative2_0(int evse_id) {
+            auto const is_set = [&](std::optional<ocpp2_0::EVSEType> const& key) {
+                auto const it = inoperative_connectors_.find(key);
+                return it != inoperative_connectors_.end() && it->second;
+            };
+
+            if (is_set(std::nullopt) || is_set(ocpp2_0::EVSEType {evse_id}))
+                return true;
+
+            bool any_connector = false;
+            for (auto const& entry : station_->getConnectorMetadata()) {
+                if (entry.first.id != evse_id)
+                    continue;
+
+                any_connector = true;
+                if (!is_set(entry.first))
+                    return false;
+            }
+
+            return any_connector;
         }
 
         bool isChargingEnabled() {
@@ -442,6 +471,9 @@ namespace chargelab {
             }
 
             saveInoperativeConnectors();
+
+            if (auto controller = availability_controller2_0_.lock())
+                controller->onChangeAvailability(req);
 
             if (charging) {
                 return ocpp2_0::ChangeAvailabilityResponse {ocpp2_0::ChangeAvailabilityStatusEnumType::kScheduled};
@@ -887,6 +919,7 @@ namespace chargelab {
         std::shared_ptr<PlatformInterface> platform_;
         std::shared_ptr<StationInterface> station_;
         std::weak_ptr<AvailabilityController1_6> availability_controller1_6_;
+        std::weak_ptr<AvailabilityController2_0> availability_controller2_0_;
 
         OperationHolder<std::string> pending_connector_status_req_;
         std::optional<std::pair<chargelab::ocpp2_0::EVSEType, ocpp2_0::StatusNotificationRequest>> pending_connector_status_update2_0_ = std::nullopt;
