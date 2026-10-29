@@ -7,6 +7,7 @@
 #include "openocpp/helpers/string.h"
 #include "openocpp/interface/component/system_interface.h"
 #include "openocpp/interface/configuration_controller1_6.h"
+#include "openocpp/interface/configuration_controller2_0.h"
 
 #include <utility>
 #include <functional>
@@ -21,11 +22,13 @@ namespace chargelab {
         explicit ConfigurationModule(
                 std::shared_ptr<Settings> settings,
                 std::shared_ptr<SystemInterface> system,
-                std::weak_ptr<ConfigurationController1_6> configuration_controller1_6 = {}
+                std::weak_ptr<ConfigurationController1_6> configuration_controller1_6 = {},
+                std::weak_ptr<ConfigurationController2_0> configuration_controller2_0 = {}
         )
             : settings_(std::move(settings)),
               system_(std::move(system)),
-              configuration_controller1_6_(std::move(configuration_controller1_6))
+              configuration_controller1_6_(std::move(configuration_controller1_6)),
+              configuration_controller2_0_(std::move(configuration_controller2_0))
         {
             assert(settings_ != nullptr);
             assert(system_ != nullptr);
@@ -88,6 +91,19 @@ namespace chargelab {
 
                                 visitor(element);
                             });
+
+                            // Variables of the controller's charger that OpenOCPP has no setting for
+                            if (auto const controller = configuration_controller2_0_.lock()) {
+                                controller->visitVariables([&](ocpp2_0::ReportDataType const& element) {
+                                    if (hasSetting2_0(element.component, element.variable))
+                                        return;
+                                    if (request.reportBase == ocpp2_0::ReportBaseEnumType::kConfigurationInventory &&
+                                        !isWritable2_0(element))
+                                        return;
+
+                                    visitor(element);
+                                });
+                            }
                         }}
                 };
 
@@ -108,6 +124,7 @@ namespace chargelab {
             }
 
             auto settings = settings_;
+            auto const controller = configuration_controller2_0_.lock();
             return ocpp2_0::GetVariablesResponse {
                     {[=](std::function<void(ocpp2_0::GetVariableResultType const &)> const &visitor) {
                         for (auto const& get_variable : request.getVariableData) {
@@ -163,6 +180,12 @@ namespace chargelab {
                                 result.attributeStatus = ocpp2_0::GetVariableStatusEnumType::kUnknownVariable;
                             }
 
+                            // A variable OpenOCPP has no setting for may be one of the controller's charger
+                            if (!variableFound && controller != nullptr) {
+                                if (auto controller_result = controller->onGetVariable(get_variable))
+                                    result = std::move(controller_result.value());
+                            }
+
                             visitor(result);
                         }
                     }}
@@ -172,6 +195,7 @@ namespace chargelab {
         std::optional<ocpp2_0::ResponseToRequest<ocpp2_0::SetVariablesResponse>>
         onSetVariablesReq(const ocpp2_0::SetVariablesRequest &request) override {
             std::vector<ocpp2_0::SetVariableResultType> results;
+            auto const controller = configuration_controller2_0_.lock();
             for (auto const& set_variable : request.setVariableData) {
                 bool componentFound = false;
                 bool variableFound = false;
@@ -274,6 +298,17 @@ namespace chargelab {
                     result.attributeStatus = ocpp2_0::SetVariableStatusEnumType::kUnknownVariable;
                 }
 
+                if (controller != nullptr) {
+                    if (!variableFound) {
+                        // A variable OpenOCPP has no setting for may be one of the controller's charger
+                        if (auto const status = controller->onSetVariable(set_variable))
+                            result.attributeStatus = status.value();
+                    } else if (result.attributeStatus == ocpp2_0::SetVariableStatusEnumType::kAccepted ||
+                               result.attributeStatus == ocpp2_0::SetVariableStatusEnumType::kRebootRequired) {
+                        controller->onVariableChanged(set_variable, result.attributeStatus);
+                    }
+                }
+
                 results.push_back(std::move(result));
             }
             
@@ -306,6 +341,29 @@ namespace chargelab {
             };
         }
 
+    private:
+        // Whether OpenOCPP has a setting for the OCPP 2.0.1 variable
+        bool hasSetting2_0(ocpp2_0::ComponentType const& component, ocpp2_0::VariableType const& variable) {
+            bool found = false;
+            settings_->visitSettings([&](SettingBase& setting) {
+                auto const metadata = setting.getMetadata();
+                if (metadata.model2_0.has_value() &&
+                    metadata.model2_0->component_type == component &&
+                    metadata.model2_0->variable_type == variable) {
+                    found = true;
+                }
+            });
+
+            return found;
+        }
+
+        static bool isWritable2_0(ocpp2_0::ReportDataType const& element) {
+            return std::any_of(element.variableAttribute.begin(), element.variableAttribute.end(), [](auto const& x) {
+                return x.mutability.has_value() && x.mutability.value() != ocpp2_0::MutabilityEnumType::kReadOnly;
+            });
+        }
+
+    public:
         std::optional<ocpp1_6::ResponseToRequest<ocpp1_6::ChangeConfigurationRsp>>
         onChangeConfigurationReq(const ocpp1_6::ChangeConfigurationReq& req) override {
             auto const controller = configuration_controller1_6_.lock();
@@ -573,6 +631,7 @@ namespace chargelab {
         std::shared_ptr<Settings> settings_;
         std::shared_ptr<SystemInterface> system_;
         std::weak_ptr<ConfigurationController1_6> configuration_controller1_6_;
+        std::weak_ptr<ConfigurationController2_0> configuration_controller2_0_;
 
         std::optional<ocpp2_0::GetBaseReportRequest> ocpp2_0_pending_base_report_ = std::nullopt;
     };

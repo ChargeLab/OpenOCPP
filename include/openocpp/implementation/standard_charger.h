@@ -90,7 +90,8 @@ namespace chargelab {
             configuration_module = std::make_shared<ConfigurationModule>(
                     notNull(settings),
                     notNull(platform),
-                    charger_interfaces1_6.configuration_controller
+                    charger_interfaces1_6.configuration_controller,
+                    charger_interfaces2_0.configuration_controller
             );
             fallback_module = std::make_shared<FallbackModule>(notNull(platform));
             reset_module = std::make_shared<ResetModule>(

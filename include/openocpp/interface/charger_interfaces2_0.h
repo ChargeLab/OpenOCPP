@@ -4,6 +4,7 @@
 
 #include "openocpp/interface/authorization_listener2_0.h"
 #include "openocpp/interface/availability_controller2_0.h"
+#include "openocpp/interface/configuration_controller2_0.h"
 #include "openocpp/interface/reset_controller2_0.h"
 #include "openocpp/interface/transaction_listener2_0.h"
 #include "openocpp/interface/transaction_controller2_0.h"
@@ -22,6 +23,7 @@ namespace chargelab {
         std::weak_ptr<TransactionController2_0> transaction_controller;
         std::weak_ptr<ResetController2_0> reset_controller;
         std::weak_ptr<AvailabilityController2_0> availability_controller;
+        std::weak_ptr<ConfigurationController2_0> configuration_controller;
     };
 
 }  // namespace chargelab
