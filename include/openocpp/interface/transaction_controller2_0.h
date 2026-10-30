@@ -24,5 +24,12 @@ namespace chargelab {
         // The backend requested to stop the running transaction on the
         // connector, which OpenOCPP is about to stop.
         virtual void onRequestStopTransaction(const std::optional<ocpp2_0::EVSEType>& evse) = 0;
+
+        // Whether OpenOCPP keeps its open transactions when it stops (a restart, or a power loss), instead of ending
+        // them with a PowerLoss stop: another charger is the one charging, and does not stop. They are saved while
+        // they run, and the next instance continues them with the same transaction ID. Default: no.
+        virtual bool keepTransactionsAcrossRestarts() {
+            return false;
+        }
     };
 }

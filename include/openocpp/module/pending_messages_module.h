@@ -131,8 +131,9 @@ namespace chargelab {
             std::uniform_int_distribution<int64_t> distribution(0, std::numeric_limits<int64_t>::max());
             request_id_ = distribution(random_engine_);
             loadFromStorage();
-            // Clear transaction_ids_ and sequence_ids_ if offline_queue_ and live_queue_ are both empty
-            if (offline_queue_.empty() && live_queue_.empty()) {
+            // Clear transaction_ids_ and sequence_ids_ if offline_queue_ and live_queue_ are both empty, unless
+            // transactions were kept across a restart: their messages continue the sequence.
+            if (offline_queue_.empty() && live_queue_.empty() && settings_->ActiveTransactions.getValue().empty()) {
                 transaction_ids_.clear();
                 sequence_ids_.clear();
             }

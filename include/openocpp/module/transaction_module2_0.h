@@ -18,6 +18,7 @@
 #include "openocpp/interface/transaction_controller2_0.h"
 #include "openocpp/interface/authorization_listener2_0.h"
 
+#include <cstdlib>
 #include <utility>
 #include <random>
 #include <unordered_set>
@@ -40,6 +41,12 @@ namespace chargelab {
      */
 
     namespace transaction_module2_0 {
+        // An open transaction on a connector, see TransactionModule2_0::activeTransactions().
+        struct ActiveTransactionInfo {
+            ocpp2_0::EVSEType evse;
+            std::optional<std::string> id_token;
+        };
+
         struct PendingStartRequest {
             PendingStartRequest(std::shared_ptr<PlatformInterface> const& platform, std::optional<ocpp2_0::EVSEType> evse, ocpp2_0::IdTokenType id_token)
                 : created_timestamp {platform->steadyClockNow()},
@@ -89,6 +96,9 @@ namespace chargelab {
 
     class TransactionModule2_0 : public ServiceStateful2_0 {
     private:
+        // How long a restored transaction waits for the station to know its connector again before it is ended
+        static constexpr int kRestoredConnectorTimeoutMillis = 2*60*1000;
+
         static constexpr int kPriorityStartTransaction = 0;
         static constexpr int kPriorityStopTransaction = 0;
         static constexpr int kPriorityMeterValue = 5;
@@ -129,6 +139,11 @@ namespace chargelab {
 
             stop_transaction_supplier_ = std::make_shared<PendingMessagesModule::saved_message_supplier> (
                     [&](std::function<void(detail::PendingMessageWrapper const&)> const& processor) {
+                        // Kept for the next instance instead, see saveForRestart() and
+                        // TransactionController2_0::keepTransactionsAcrossRestarts()
+                        if (restart_save_ || keepAcrossRestarts())
+                            return;
+
                         for (auto& entry : active_transactions_) {
                             if (!entry.second.has_value())
                                 continue;
@@ -144,6 +159,8 @@ namespace chargelab {
                     }
             );
             pending_messages_module_->registerOnSaveMessageSupplier(stop_transaction_supplier_);
+
+            restoreSavedTransactions();
         }
 
         ~TransactionModule2_0() override {
@@ -155,6 +172,8 @@ namespace chargelab {
 
     public:
         void runStep(ocpp2_0::OcppRemote& remote) override {
+            refreshSavedTransactions();
+
             auto const& metadata = station_->getConnectorMetadata();
 
             // Process an RFID tap if there was a state change
@@ -229,6 +248,8 @@ namespace chargelab {
             // Process transactions
             for (auto& entry : active_transactions_) {
                 if (!entry.second.has_value())
+                    continue;
+                if (entry.second->restored)
                     continue;
 
                 // E03.FR.05 - TODO
@@ -347,10 +368,26 @@ namespace chargelab {
 
                 auto const status = station_->pollConnectorStatus(entry.first.value());
                 if (!status.has_value()) {
+                    // A restored transaction waits for the station to know the connector again
+                    if (entry.second->restored) {
+                        if (platform_->steadyClockNow() - restored_at_ > kRestoredConnectorTimeoutMillis) {
+                            CHARGELAB_LOG_MESSAGE(warning) << "Stopping transaction (connector not reported after the restart) - transaction ID: " << entry.second->transaction_id;
+                            stopTransaction(
+                                    entry.first,
+                                    ocpp2_0::TriggerReasonEnumType::kAbnormalCondition,
+                                    ocpp2_0::ReasonEnumType::kPowerLoss,
+                                    std::nullopt
+                            );
+                        }
+                        continue;
+                    }
+
                     CHARGELAB_LOG_MESSAGE(error) << "Unexpected state: connector did not exist for running transaction - dropping: " << entry.second->transaction_id;
                     entry.second = std::nullopt;
                     continue;
                 }
+
+                entry.second->restored = false;
 
                 if (entry.second->authorized && !entry.second->deauthorized && status->vehicle_connected) {
                     power_management_module_->onActiveTransactionStarted(
@@ -715,6 +752,41 @@ namespace chargelab {
             return response;
         }
 
+        // Keeps the active transactions across a restart of OpenOCPP, which another charger carries on with (it is
+        // the one charging). Called right before the pending messages are flushed and this instance is destroyed: no
+        // PowerLoss stop is written for the transactions, and the next instance restores them (see
+        // restoreSavedTransactions()) and continues them with the same transaction ID. Returns how many were kept.
+        //
+        // Not kept: the meter values collected for the final event of the transaction, and the charging profile of
+        // the remote start (OpenOCPP applies it once).
+        std::size_t saveForRestart() {
+            auto const saved = collectSavedTransactions();
+            settings_->ActiveTransactions.setValue(saved.empty() ? std::string {} : write_json_to_string(saved));
+            settings_->saveIfModified();
+            restart_save_ = !saved.empty();
+
+            CHARGELAB_LOG_MESSAGE(info) << "Kept " << saved.size() << " transaction(s) for the restart";
+            return saved.size();
+        }
+
+        // The open transactions that have a connector, with the idToken of each. A transaction that was restored
+        // after a restart is among them, so the charger it is run for can be matched with it.
+        std::vector<chargelab::transaction_module2_0::ActiveTransactionInfo> activeTransactions() const {
+            std::vector<chargelab::transaction_module2_0::ActiveTransactionInfo> result;
+            for (auto const& entry : active_transactions_) {
+                if (!entry.first.has_value() || !entry.second.has_value())
+                    continue;
+
+                std::optional<std::string> id_token;
+                if (entry.second->id_token.has_value())
+                    id_token = entry.second->id_token->idToken.value();
+
+                result.push_back(chargelab::transaction_module2_0::ActiveTransactionInfo {entry.first.value(), std::move(id_token)});
+            }
+
+            return result;
+        }
+
         // Stops the transaction on the connector for a reason outside of
         // OpenOCPP, e.g. the charger it is run for stopped it. Returns false
         // if there is none.
@@ -731,6 +803,140 @@ namespace chargelab {
             CHARGELAB_LOG_MESSAGE(info) << "Stopping transaction (external) - transaction ID: " << it->second->transaction_id;
             stopTransaction(evse, trigger_reason, stopped_reason, std::move(id_token));
             return true;
+        }
+
+    private:
+        bool keepAcrossRestarts() {
+            auto const controller = transaction_controller_.lock();
+            return controller != nullptr && controller->keepTransactionsAcrossRestarts();
+        }
+
+        std::vector<chargelab::transaction_module2_0::SavedTransaction> collectSavedTransactions() const {
+            auto const system_now = static_cast<std::int64_t>(platform_->systemClockNow());
+            auto const steady_now = static_cast<std::int64_t>(platform_->steadyClockNow());
+
+            std::vector<chargelab::transaction_module2_0::SavedTransaction> saved;
+            for (auto const& entry : active_transactions_) {
+                if (!entry.second.has_value())
+                    continue;
+
+                auto const& transaction = entry.second.value();
+                saved.push_back(chargelab::transaction_module2_0::SavedTransaction {
+                    entry.first,
+                    std::to_string(transaction.transaction_id),
+                    transaction.id_token,
+                    transaction.group_id_token,
+                    transaction.charging_profile,
+                    transaction.authorized,
+                    transaction.deauthorized,
+                    transaction.plugged_in,
+                    system_now - (steady_now - static_cast<std::int64_t>(transaction.start_ts)),
+                    static_cast<std::int64_t>(transaction.last_sampled_reading_timestamp),
+                    static_cast<std::int64_t>(transaction.last_sampled_ended_meter_values_timestamp),
+                    static_cast<std::int64_t>(transaction.last_clock_aligned_reading_timestamp),
+                    static_cast<std::int64_t>(transaction.last_clock_aligned_ended_meter_values_timestamp),
+                    transaction.last_charging_status
+                });
+            }
+
+            return saved;
+        }
+
+        // What decides whether the saved transactions are up to date: the ones that are open, and who they belong
+        // to, not their meter timestamps (which change every sample).
+        std::string savedTransactionsSignature() const {
+            std::string result;
+            for (auto const& entry : active_transactions_) {
+                if (!entry.second.has_value())
+                    continue;
+
+                auto const& transaction = entry.second.value();
+                if (entry.first.has_value()) {
+                    result += std::to_string(entry.first->id) + "." + std::to_string(entry.first->connectorId.value_or(-1));
+                }
+                result += "|" + std::to_string(transaction.transaction_id);
+                result += "|" + (transaction.id_token.has_value() ? std::string(transaction.id_token->idToken.value()) : std::string {});
+                result += "|" + (transaction.group_id_token.has_value() ? std::string(transaction.group_id_token->idToken.value()) : std::string {});
+                result += transaction.authorized ? "|a" : "|-";
+                result += transaction.deauthorized ? "d" : "-";
+                result += transaction.plugged_in ? "p;" : "-;";
+            }
+
+            return result;
+        }
+
+        // While the transactions are kept across restarts, they are saved whenever one starts, ends or changes hands,
+        // since OpenOCPP may stop at any time. Otherwise they are saved by saveForRestart().
+        void refreshSavedTransactions() {
+            if (!keepAcrossRestarts())
+                return;
+
+            auto signature = savedTransactionsSignature();
+            if (signature == saved_transactions_signature_)
+                return;
+
+            saved_transactions_signature_ = std::move(signature);
+            auto const saved = collectSavedTransactions();
+            settings_->ActiveTransactions.setValue(saved.empty() ? std::string {} : write_json_to_string(saved));
+        }
+
+    private:
+        // The transactions the previous instance kept, see saveForRestart(); consumed, so a later start without a
+        // save does not restore them again.
+        void restoreSavedTransactions() {
+            auto const text = settings_->ActiveTransactions.getValue();
+            if (text.empty())
+                return;
+
+            // Consumed, unless they are kept up to date while they run
+            if (!keepAcrossRestarts())
+                settings_->ActiveTransactions.setValue("");
+            auto const saved = read_json_from_string<std::vector<chargelab::transaction_module2_0::SavedTransaction>>(text);
+            if (!saved.has_value()) {
+                CHARGELAB_LOG_MESSAGE(warning) << "Failed reading the kept transactions: " << text;
+                return;
+            }
+
+            auto const system_now = static_cast<std::int64_t>(platform_->systemClockNow());
+            auto const steady_now = static_cast<std::int64_t>(platform_->steadyClockNow());
+            for (auto const& item : saved.value()) {
+                char* end = nullptr;
+                auto const transaction_id = std::strtoull(item.transaction_id.c_str(), &end, 10);
+                if (item.transaction_id.empty() || *end != '\0') {
+                    CHARGELAB_LOG_MESSAGE(warning) << "Ignoring a kept transaction with a bad ID: " << item.transaction_id;
+                    continue;
+                }
+
+                // The start is kept as a time of the system clock; relative charging schedules count from it.
+                auto const start_ts = static_cast<SteadyPointMillis>(steady_now - (system_now - item.started_at));
+                active_transactions_[item.evse] = chargelab::transaction_module2_0::TransactionContainer {
+                    transaction_id,
+                    start_ts,
+                    item.id_token,
+                    item.group_id_token,
+                    "",
+                    item.charging_profile,
+                    item.authorized,
+                    item.deauthorized,
+                    item.plugged_in,
+                    static_cast<SystemTimeMillis>(item.last_sampled_reading_timestamp),
+                    static_cast<SystemTimeMillis>(item.last_sampled_ended_meter_values_timestamp),
+                    static_cast<SystemTimeMillis>(item.last_clock_aligned_reading_timestamp),
+                    static_cast<SystemTimeMillis>(item.last_clock_aligned_ended_meter_values_timestamp),
+                    item.last_charging_status,
+                    {},
+                    true
+                };
+
+                // No new transaction for a vehicle that is connected already
+                if (item.evse.has_value() && item.plugged_in)
+                    last_plugged_in_state_[item.evse.value()] = true;
+
+                CHARGELAB_LOG_MESSAGE(info) << "Restored transaction - transaction ID: " << transaction_id;
+            }
+
+            restored_at_ = platform_->steadyClockNow();
+            saved_transactions_signature_ = savedTransactionsSignature();
         }
 
     private:
@@ -1777,6 +1983,13 @@ namespace chargelab {
         std::weak_ptr<TransactionController2_0> transaction_controller_;
         std::default_random_engine random_engine_;
         std::shared_ptr<PendingMessagesModule::saved_message_supplier> stop_transaction_supplier_;
+
+        // The transactions are kept for the next instance, see saveForRestart()
+        bool restart_save_ = false;
+
+        // When the transactions were restored, and what was last saved, see refreshSavedTransactions()
+        SteadyPointMillis restored_at_ {};
+        std::string saved_transactions_signature_;
 
         std::shared_ptr<Settings> settings_;
         std::atomic<int64_t> unique_index_;
