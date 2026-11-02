@@ -2131,6 +2131,21 @@ namespace chargelab {
                 [](auto const&) {return true;}
         };
 
+        // The OCPP 1.6 transactions OpenOCPP keeps across a restart it is told about (see
+        // TransactionModule1_6::saveForRestart), as JSON; empty otherwise. Internal: not visible through OCPP.
+        SettingString ActiveTransactions1_6 {
+                []() {
+                    return SettingMetadata {
+                            "ActiveTransactions1_6",
+                            SettingConfig {false, false, true, false},
+                            std::nullopt,
+                            std::nullopt,
+                            ""
+                    };
+                },
+                [](auto const&) {return true;}
+        };
+
         SettingString InoperativeConnectors {
                 []() {
                     return SettingMetadata {
@@ -3251,6 +3266,7 @@ namespace chargelab {
             combined_setting_list_ = {
                     &ActiveFirmwareSlotId,
                     &ActiveTransactions,
+                    &ActiveTransactions1_6,
                     &ActiveNetworkProfile,
                     &AlignedDataAvailable,
                     &AlignedDataTxEndedInterval,

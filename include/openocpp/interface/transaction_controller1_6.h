@@ -25,5 +25,12 @@ namespace chargelab {
             const ocpp1_6::RemoteStartTransactionReq& request) {
             return true;
         }
+
+        // Whether OpenOCPP keeps its open transactions when it stops (a restart, or a power loss), instead of ending
+        // them with a PowerLoss stop: another charger is the one charging, and does not stop. They are saved while
+        // they run, and the next instance continues them with the same transaction ID. Default: no.
+        virtual bool keepTransactionsAcrossRestarts() {
+            return false;
+        }
     };
 }

@@ -133,7 +133,8 @@ namespace chargelab {
             loadFromStorage();
             // Clear transaction_ids_ and sequence_ids_ if offline_queue_ and live_queue_ are both empty, unless
             // transactions were kept across a restart: their messages continue the sequence.
-            if (offline_queue_.empty() && live_queue_.empty() && settings_->ActiveTransactions.getValue().empty()) {
+            if (offline_queue_.empty() && live_queue_.empty() && settings_->ActiveTransactions.getValue().empty() &&
+                settings_->ActiveTransactions1_6.getValue().empty()) {
                 transaction_ids_.clear();
                 sequence_ids_.clear();
             }
