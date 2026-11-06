@@ -2116,6 +2116,51 @@ namespace chargelab {
                 [](auto const& value) {return value > 0;}
         };
 
+        // The OCPP 2.0.1 transactions OpenOCPP keeps across a restart it is told about (see
+        // TransactionModule2_0::saveForRestart), as JSON; empty otherwise. Internal: not visible through OCPP.
+        SettingString ActiveTransactions {
+                []() {
+                    return SettingMetadata {
+                            "ActiveTransactions",
+                            SettingConfig {false, false, true, false},
+                            std::nullopt,
+                            std::nullopt,
+                            ""
+                    };
+                },
+                [](auto const&) {return true;}
+        };
+
+        // The OCPP 1.6 transactions OpenOCPP keeps across a restart it is told about (see
+        // TransactionModule1_6::saveForRestart), as JSON; empty otherwise. Internal: not visible through OCPP.
+        SettingString ActiveTransactions1_6 {
+                []() {
+                    return SettingMetadata {
+                            "ActiveTransactions1_6",
+                            SettingConfig {false, false, true, false},
+                            std::nullopt,
+                            std::nullopt,
+                            ""
+                    };
+                },
+                [](auto const&) {return true;}
+        };
+
+        // A transaction ID of a controlled OCPP 1.6 charger that no later transaction gets, so the IDs a controller
+        // hands out never repeat across its restarts. Internal: not visible through OCPP.
+        SettingInt TransactionIdLimit1_6 {
+                []() {
+                    return SettingMetadata {
+                            "TransactionIdLimit1_6",
+                            SettingConfig {false, false, true, false},
+                            std::nullopt,
+                            std::nullopt,
+                            std::to_string(0)
+                    };
+                },
+                [](auto const& value) {return value >= 0;}
+        };
+
         SettingString InoperativeConnectors {
                 []() {
                     return SettingMetadata {
@@ -3235,6 +3280,9 @@ namespace chargelab {
         {
             combined_setting_list_ = {
                     &ActiveFirmwareSlotId,
+                    &ActiveTransactions,
+                    &ActiveTransactions1_6,
+                    &TransactionIdLimit1_6,
                     &ActiveNetworkProfile,
                     &AlignedDataAvailable,
                     &AlignedDataTxEndedInterval,

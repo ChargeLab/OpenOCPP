@@ -28,6 +28,11 @@ namespace chargelab::common {
         }
         DateTime(std::string text) : text_(text), timestamp_(textToTimestamp(text)) {
         }
+        // Convenience: construct from a wall-clock time point, e.g. DateTime{system_clock::now()}.
+        DateTime(std::chrono::system_clock::time_point const& tp)
+            : DateTime(static_cast<SystemTimeMillis>(
+                  std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch()).count())) {
+        }
 
         [[nodiscard]] std::optional<std::string> getText() const {
             return text_;

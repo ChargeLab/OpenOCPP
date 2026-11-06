@@ -51,7 +51,7 @@ namespace chargelab {
                 EndArrayType
         >;
 
-        std::string token_to_string(TokenType const& token) {
+        inline std::string token_to_string(TokenType const& token) {
             if (std::holds_alternative<NullType>(token)) return "NullType";
             if (std::holds_alternative<BoolType>(token)) return std::string("BoolType{") + (std::get<BoolType>(token).value ? "true" : "false") + "}";
             if (std::holds_alternative<IntType>(token)) return "IntType{" + std::to_string(std::get<IntType>(token).value) + "}";
@@ -69,7 +69,7 @@ namespace chargelab {
             return "Unknown";
         }
 
-        std::string token_to_string(std::optional<TokenType> const& token) {
+        inline std::string token_to_string(std::optional<TokenType> const& token) {
             if (!token.has_value())
                 return "nullopt";
 
@@ -1074,7 +1074,7 @@ namespace chargelab {
             }
         };
 
-        bool skip_field(JsonReader& reader) {
+        inline bool skip_field(JsonReader& reader) {
             int object_stack = 0;
             int array_stack = 0;
             do {
@@ -1097,7 +1097,7 @@ namespace chargelab {
             return true;
         }
 
-        bool names_match_ci_ignore_ws(char const* lhs, std::size_t lhs_len, char const* rhs, std::size_t rhs_len) {
+        inline bool names_match_ci_ignore_ws(char const* lhs, std::size_t lhs_len, char const* rhs, std::size_t rhs_len) {
             std::size_t index_lhs = 0;
             std::size_t index_rhs = 0;
 
@@ -1130,11 +1130,11 @@ namespace chargelab {
             return true;
         }
 
-        bool is_field(KeyType const& key, char const* name) {
+        inline bool is_field(KeyType const& key, char const* name) {
             return names_match_ci_ignore_ws(key.str, key.length, name, std::strlen(name));
         }
 
-        bool is_enum(char const* key, std::size_t key_len, char const* entry) {
+        inline bool is_enum(char const* key, std::size_t key_len, char const* entry) {
             return names_match_ci_ignore_ws(key, key_len, entry, std::strlen(entry));
         }
     }

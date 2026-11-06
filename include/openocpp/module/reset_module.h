@@ -5,6 +5,8 @@
 #include "openocpp/module/connector_status_module.h"
 #include "openocpp/interface/component/system_interface.h"
 #include "openocpp/common/settings.h"
+#include "openocpp/interface/reset_controller1_6.h"
+#include "openocpp/interface/reset_controller2_0.h"
 
 namespace chargelab {
     class ResetModule : public ServiceStatefulGeneral {
@@ -15,11 +17,15 @@ namespace chargelab {
         ResetModule(
                 std::shared_ptr<Settings> settings,
                 std::shared_ptr<SystemInterface> system,
-                std::shared_ptr<ConnectorStatusModule> connector_status_module
+                std::shared_ptr<ConnectorStatusModule> connector_status_module,
+                std::weak_ptr<ResetController1_6> reset_controller1_6 = {},
+                std::weak_ptr<ResetController2_0> reset_controller2_0 = {}
         )
                 : settings_(std::move(settings)),
                   system_(std::move(system)),
-                  connector_status_module_(std::move(connector_status_module))
+                  connector_status_module_(std::move(connector_status_module)),
+                  reset_controller1_6_(std::move(reset_controller1_6)),
+                  reset_controller2_0_(std::move(reset_controller2_0))
         {
         }
 
@@ -68,6 +74,10 @@ namespace chargelab {
 
         std::optional<ocpp2_0::ResponseToRequest <ocpp2_0::ResetResponse>>
         onResetReq(const ocpp2_0::ResetRequest &req) override {
+            // If a controller takes over resets, do not schedule a reset of this system.
+            if (auto controller = reset_controller2_0_.lock())
+                return ocpp2_0::ResetResponse {controller->onReset(req)};
+
             // B11.FR.09
             if (req.evseId.has_value()) {
                 return ocpp2_0::ResetResponse {ocpp2_0::ResetStatusEnumType::kRejected};
@@ -113,6 +123,13 @@ namespace chargelab {
 
         std::optional<ocpp1_6::ResponseToRequest <ocpp1_6::ResetRsp>>
         onResetReq(const ocpp1_6::ResetReq &req) override {
+            // If a controller takes over resets, do not schedule a reset of this system.
+            if (auto controller = reset_controller1_6_.lock()) {
+                return ocpp1_6::ResetRsp {
+                        controller->onReset(req) ? ocpp1_6::ResetStatus::kAccepted : ocpp1_6::ResetStatus::kRejected
+                };
+            }
+
             switch (req.type) {
                 case ocpp1_6::ResetType::kValueNotFoundInEnum:
                     CHARGELAB_LOG_MESSAGE(warning) << "Invalid reset request type - treating as Soft";
@@ -195,6 +212,8 @@ namespace chargelab {
         std::shared_ptr<Settings> settings_;
         std::shared_ptr<SystemInterface> system_;
         std::shared_ptr<ConnectorStatusModule> connector_status_module_;
+        std::weak_ptr<ResetController1_6> reset_controller1_6_;
+        std::weak_ptr<ResetController2_0> reset_controller2_0_;
 
         std::optional<SteadyPointMillis> hard_reset_threshold_ = std::nullopt;
         std::optional<SteadyPointMillis> soft_reset_threshold_ = std::nullopt;

@@ -58,6 +58,14 @@ namespace chargelab {
             return registration_complete_;
         }
 
+        /**
+         * Sends a new BootNotification request on the next step, as for a TriggerMessage(BootNotification). Used
+         * when the charger this instance represents has rebooted. This method is thread safe.
+         */
+        void requestBootNotification() {
+            force_boot_notification_req_ = true;
+        }
+
     private:
         // OCPP 1.6 implementation
         void runStep(ocpp1_6::OcppRemote &remote) override {

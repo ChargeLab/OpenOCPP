@@ -30,7 +30,7 @@ namespace chargelab::uri {
             }
         }
 
-        int GetHexValue(char ch) {
+        inline int GetHexValue(char ch) {
             if (ch >= '0' && ch <= '9')
                 return ch-'0';
             if (ch >= 'a' && ch <= 'f')
@@ -227,7 +227,7 @@ namespace chargelab::uri {
         return result;
     }
 
-    std::string decodeUriComponent(std::string const& text) {
+    inline std::string decodeUriComponent(std::string const& text) {
         std::string result;
         for (std::size_t i=0; i < text.size(); i++) {
             // Note: allowing for deviations here; % prefixes not representing a valid octet and ignored
@@ -235,7 +235,7 @@ namespace chargelab::uri {
                 auto const ch1 = detail::GetHexValue(text[i+1]);
                 auto const ch2 = detail::GetHexValue(text[i+2]);
                 if (ch1 >= 0 && ch2 >= 0) {
-                    result += (char)((ch1 << 8) | ch2);
+                    result += (char)((ch1 << 4) | ch2);
                     i += 2;
                     continue;
                 }

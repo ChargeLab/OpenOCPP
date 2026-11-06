@@ -4,6 +4,8 @@
 #include "openocpp/module/common_templates.h"
 #include "openocpp/interface/platform_interface.h"
 #include "openocpp/interface/station_interface.h"
+#include "openocpp/interface/availability_controller1_6.h"
+#include "openocpp/interface/availability_controller2_0.h"
 #include "openocpp/common/settings.h"
 #include "openocpp/common/logging.h"
 #include "openocpp/common/operation_holder.h"
@@ -30,11 +32,15 @@ namespace chargelab {
         ConnectorStatusModule(
                 std::shared_ptr<Settings> settings,
                 std::shared_ptr<PlatformInterface> const& platform,
-                std::shared_ptr<StationInterface> station
+                std::shared_ptr<StationInterface> station,
+                std::weak_ptr<AvailabilityController1_6> availability_controller1_6 = {},
+                std::weak_ptr<AvailabilityController2_0> availability_controller2_0 = {}
         )
                 : settings_(std::move(settings)),
                   platform_(platform),
                   station_(std::move(station)),
+                  availability_controller1_6_(std::move(availability_controller1_6)),
+                  availability_controller2_0_(std::move(availability_controller2_0)),
                   pending_connector_status_req_ {platform}
         {
             assert(platform_ != nullptr);
@@ -46,6 +52,49 @@ namespace chargelab {
         }
 
     public:
+        /**
+         * Whether the OCPP 1.6 connector was made inoperative, directly or through connector 0, by ChangeAvailability.
+         * No transaction may be started on an inoperative connector.
+         */
+        bool isInoperative1_6(int connector_id) {
+            auto const is_set = [&](std::optional<ocpp2_0::EVSEType> const& key) {
+                auto const it = inoperative_connectors_.find(key);
+                return it != inoperative_connectors_.end() && it->second;
+            };
+
+            if (is_set(std::nullopt))
+                return true;
+
+            auto const evse = station_->lookupConnectorId1_6(connector_id);
+            return evse.has_value() && is_set(evse);
+        }
+
+        /**
+         * Whether the OCPP 2.0.1 EVSE was made inoperative by ChangeAvailability: for the whole station, for the
+         * EVSE, or for each of its connectors.
+         */
+        bool isInoperative2_0(int evse_id) {
+            auto const is_set = [&](std::optional<ocpp2_0::EVSEType> const& key) {
+                auto const it = inoperative_connectors_.find(key);
+                return it != inoperative_connectors_.end() && it->second;
+            };
+
+            if (is_set(std::nullopt) || is_set(ocpp2_0::EVSEType {evse_id}))
+                return true;
+
+            bool any_connector = false;
+            for (auto const& entry : station_->getConnectorMetadata()) {
+                if (entry.first.id != evse_id)
+                    continue;
+
+                any_connector = true;
+                if (!is_set(entry.first))
+                    return false;
+            }
+
+            return any_connector;
+        }
+
         bool isChargingEnabled() {
             for (auto const& entry : station_->getConnectorMetadata()) {
                 auto const current_state = station_->pollConnectorStatus(entry.first);
@@ -202,6 +251,27 @@ namespace chargelab {
         }
 
         void runStep(ocpp1_6::OcppRemote &remote) override {
+            if (force_connector0_status1_6_ && !pending_connector_status_req_.operationInProgress()) {
+                force_connector0_status1_6_ = false;
+
+                ocpp1_6::StatusNotificationReq request {
+                        0,
+                        ocpp1_6::ChargePointErrorCode::kNoError,
+                        std::nullopt,
+                        isChargePointInoperative1_6() ? ocpp1_6::ChargePointStatus::kUnavailable : ocpp1_6::ChargePointStatus::kAvailable,
+                        ocpp1_6::DateTime{platform_->systemClockNow()},
+                        std::nullopt,
+                        std::nullopt
+                };
+
+                pending_connector_status_update1_6_ = std::nullopt;
+                pending_connector_status_req_.setWithTimeout(
+                        settings_->DefaultMessageTimeout.getValue(),
+                        remote.sendStatusNotificationReq(request)
+                );
+                return;
+            }
+
             for (auto& entry : station_->getConnectorMetadata()) {
                 auto const current_state = station_->pollConnectorStatus(entry.first);
                 if (!current_state.has_value())
@@ -286,6 +356,12 @@ namespace chargelab {
             if (req.requestedMessage != ocpp1_6::MessageTrigger::kStatusNotification)
                 return std::nullopt;
 
+            // Connector 0: the status of the charge point as a whole
+            if (req.connectorId == std::make_optional(0)) {
+                force_connector0_status1_6_ = true;
+                return ocpp1_6::TriggerMessageRsp {ocpp1_6::TriggerMessageStatus::kAccepted};
+            }
+
             bool found = false;
             for (auto const& entry : station_->getConnectorMetadata()) {
                 if (req.connectorId.has_value()) {
@@ -339,23 +415,12 @@ namespace chargelab {
                     break;
             }
 
-            bool charging = false;
-            for (auto const& entry : station_->getConnectorMetadata()) {
-                if (req.connectorId != 0) {
-                    if (req.connectorId != entry.second.connector_id1_6)
-                        continue;
-                }
-
-                auto const status = station_->pollConnectorStatus(entry.first);
-                if (status.has_value() && status->charging_enabled) {
-                    charging = true;
-                    break;
-                }
-            }
-
             saveInoperativeConnectors();
 
-            if (charging) {
+            if (auto controller = availability_controller1_6_.lock())
+                controller->onChangeAvailability(req);
+
+            if (isCharging1_6(req.connectorId)) {
                 return ocpp1_6::ChangeAvailabilityRsp {ocpp1_6::AvailabilityStatus::kScheduled};
             } else {
                 return ocpp1_6::ChangeAvailabilityRsp {ocpp1_6::AvailabilityStatus::kAccepted};
@@ -407,6 +472,9 @@ namespace chargelab {
 
             saveInoperativeConnectors();
 
+            if (auto controller = availability_controller2_0_.lock())
+                controller->onChangeAvailability(req);
+
             if (charging) {
                 return ocpp2_0::ChangeAvailabilityResponse {ocpp2_0::ChangeAvailabilityStatusEnumType::kScheduled};
             } else {
@@ -415,6 +483,35 @@ namespace chargelab {
         }
 
     private:
+        // The charge point as a whole is inoperative: made so through connector 0, or every connector is inoperative
+        bool isChargePointInoperative1_6() {
+            auto const it = inoperative_connectors_.find(std::nullopt);
+            if (it != inoperative_connectors_.end() && it->second)
+                return true;
+
+            auto const metadata = station_->getConnectorMetadata();
+            if (metadata.empty())
+                return false;
+
+            return std::all_of(metadata.begin(), metadata.end(), [&](auto const& entry) {
+                return isInoperative1_6(entry.second.connector_id1_6);
+            });
+        }
+
+        // Whether any connector affected by an OCPP 1.6 request for connector_id (0 for all) is charging
+        bool isCharging1_6(int connector_id) {
+            for (auto const& entry : station_->getConnectorMetadata()) {
+                if (connector_id != 0 && connector_id != entry.second.connector_id1_6)
+                    continue;
+
+                auto const status = station_->pollConnectorStatus(entry.first);
+                if (status.has_value() && status->charging_enabled)
+                    return true;
+            }
+
+            return false;
+        }
+
         void advanceConnectorState(detail::ReportedConnectorStatus& reported, charger::ConnectorStatus const& current) {
             if (current.vehicle_connected && current.charging_enabled) {
                 reported.current_plug_was_charging = true;
@@ -821,11 +918,15 @@ namespace chargelab {
         std::shared_ptr<Settings> settings_;
         std::shared_ptr<PlatformInterface> platform_;
         std::shared_ptr<StationInterface> station_;
+        std::weak_ptr<AvailabilityController1_6> availability_controller1_6_;
+        std::weak_ptr<AvailabilityController2_0> availability_controller2_0_;
 
         OperationHolder<std::string> pending_connector_status_req_;
         std::optional<std::pair<chargelab::ocpp2_0::EVSEType, ocpp2_0::StatusNotificationRequest>> pending_connector_status_update2_0_ = std::nullopt;
         std::optional<std::pair<chargelab::ocpp2_0::EVSEType, ocpp1_6::StatusNotificationReq>> pending_connector_status_update1_6_ = std::nullopt;
         std::map<chargelab::ocpp2_0::EVSEType, detail::ReportedConnectorStatus> reported_status_;
+        // A TriggerMessage requested the status of connector 0
+        bool force_connector0_status1_6_ = false;
         std::map<std::optional<chargelab::ocpp2_0::EVSEType>, bool> inoperative_connectors_;
         std::atomic<bool> pending_reset_ = false;
         std::atomic<bool> reset_reason_hard_ = false;   // hard reset or soft reset

@@ -8,6 +8,7 @@
 #include <optional>
 
 #include "openocpp/model/system_types.h"
+#include "openocpp/protocol/ocpp2_0/types/evse_type.h"
 #include "openocpp/protocol/ocpp2_0/types/id_token_type.h"
 #include "openocpp/protocol/ocpp2_0/types/charging_profile_type.h"
 #include "openocpp/protocol/ocpp2_0/types/charging_state_enum_type.h"
@@ -34,6 +35,33 @@ namespace chargelab {
 
             std::optional<chargelab::ocpp2_0::ChargingStateEnumType> last_charging_status = std::nullopt;
             std::vector<chargelab::ocpp2_0::MeterValueType> ended_meter_values {};
+
+            // Restored after a restart, and not handled until the station knows the connector again.
+            bool restored = false;
+        };
+
+        // What is kept of a transaction across a restart, see TransactionModule2_0::saveForRestart(). Times are
+        // system clock milliseconds; the transaction ID is a decimal string.
+        struct SavedTransaction {
+            std::optional<chargelab::ocpp2_0::EVSEType> evse {};
+            std::string transaction_id {};
+            std::optional<chargelab::ocpp2_0::IdTokenType> id_token {};
+            std::optional<chargelab::ocpp2_0::IdTokenType> group_id_token {};
+            std::optional<chargelab::ocpp2_0::ChargingProfileType> charging_profile {};
+            bool authorized {};
+            bool deauthorized {};
+            bool plugged_in {};
+            std::int64_t started_at {};
+            std::int64_t last_sampled_reading_timestamp {};
+            std::int64_t last_sampled_ended_meter_values_timestamp {};
+            std::int64_t last_clock_aligned_reading_timestamp {};
+            std::int64_t last_clock_aligned_ended_meter_values_timestamp {};
+            std::optional<chargelab::ocpp2_0::ChargingStateEnumType> last_charging_status {};
+            CHARGELAB_JSON_INTRUSIVE(SavedTransaction, evse, transaction_id, id_token, group_id_token,
+                                     charging_profile, authorized, deauthorized, plugged_in, started_at,
+                                     last_sampled_reading_timestamp, last_sampled_ended_meter_values_timestamp,
+                                     last_clock_aligned_reading_timestamp,
+                                     last_clock_aligned_ended_meter_values_timestamp, last_charging_status)
         };
     }
 }

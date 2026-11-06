@@ -24,6 +24,9 @@
 #include "openocpp/interface/transaction_listener1_6.h"
 #include "openocpp/interface/transaction_listener2_0.h"
 
+#include "openocpp/interface/charger_interfaces1_6.h"
+#include "openocpp/interface/charger_interfaces2_0.h"
+
 namespace chargelab {
     class StandardCharger {
     public:
@@ -58,7 +61,9 @@ namespace chargelab {
 
         StandardCharger(
                 std::shared_ptr<PlatformInterface> platform_interface,
-                std::shared_ptr<StationInterface> station_interface
+                std::shared_ptr<StationInterface> station_interface,
+                ChargerInterfaces1_6 charger_interfaces1_6 = {},
+                ChargerInterfaces2_0 charger_interfaces2_0 = {}
         )
                 : platform(std::move(platform_interface)),
                   station(std::move(station_interface))
@@ -74,15 +79,28 @@ namespace chargelab {
             connector_status_module = std::make_shared<ConnectorStatusModule>(
                     notNull(settings),
                     notNull(platform),
-                    notNull(station)
+                    notNull(station),
+                    charger_interfaces1_6.availability_controller,
+                    charger_interfaces2_0.availability_controller
             );
 
             get_logs_module = std::make_shared<GetLogsModule>(notNull(platform), notNull(pending_messages_module));
             boot_notification_module = std::make_shared<BootNotificationModule>(notNull(settings), notNull(platform));
             heartbeat_module = std::make_shared<HeartbeatModule>(notNull(settings), notNull(platform));
-            configuration_module = std::make_shared<ConfigurationModule>(notNull(settings), notNull(platform));
+            configuration_module = std::make_shared<ConfigurationModule>(
+                    notNull(settings),
+                    notNull(platform),
+                    charger_interfaces1_6.configuration_controller,
+                    charger_interfaces2_0.configuration_controller
+            );
             fallback_module = std::make_shared<FallbackModule>(notNull(platform));
-            reset_module = std::make_shared<ResetModule>(notNull(settings), notNull(platform), notNull(connector_status_module));
+            reset_module = std::make_shared<ResetModule>(
+                    notNull(settings),
+                    notNull(platform),
+                    notNull(connector_status_module),
+                    charger_interfaces1_6.reset_controller,
+                    charger_interfaces2_0.reset_controller
+            );
 
             // TODO: Maybe hash methods should move into platform?
             firmware_update_module = std::make_shared<FirmwareUpdateModule<HashMethodsMbedTLS>>(
@@ -92,7 +110,7 @@ namespace chargelab {
                             notNull(connector_status_module),
                             notNull(station)
             );
-
+            
             CHARGELAB_LOG_MESSAGE(info) << "Initializing OCPP 1.6 modules...";
             power_management_module1_6 = std::make_shared<PowerManagementModule1_6>(
                     notNull(settings),
@@ -108,7 +126,9 @@ namespace chargelab {
                     notNull(pending_messages_module),
                     notNull(connector_status_module),
                     notNull(station),
-                    nullptr  // TODO: will provide the transaction listener 1_6 from another moudle, e.g. for handling CTEP
+                    charger_interfaces1_6.transaction_listener,
+                    charger_interfaces1_6.authorization_listener,
+                    charger_interfaces1_6.transaction_controller
             );
 
             message_handler1_6 = std::make_shared<ocpp1_6::OcppMessageHandler>(
@@ -147,7 +167,9 @@ namespace chargelab {
                     notNull(pending_messages_module),
                     notNull(connector_status_module),
                     notNull(station),
-                    nullptr  // TODO: will provide the transaction listener 2_0 from another moudle, e.g. for handling CTEP
+                    charger_interfaces2_0.transaction_listener,
+                    charger_interfaces2_0.authorization_listener,
+                    charger_interfaces2_0.transaction_controller
             );
 
             message_handler2_0 = std::make_shared<ocpp2_0::OcppMessageHandler>(

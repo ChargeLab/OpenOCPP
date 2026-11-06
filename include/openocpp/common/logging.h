@@ -178,7 +178,7 @@ namespace chargelab::logging {
 
 #if defined(LOG_WITH_FILE_AND_LINE)
 #define CHARGELAB_LOG_MESSAGE(level) \
-    for (::chargelab::LogAccumulator accumulator{::chargelab::LogLevel::level, ::chargelab::detail::FileName(__FILE__), __LINE__, __func__}; !accumulator.getDone(); accumulator.setDone(true)) \
+    for (::chargelab::logging::LogAccumulator accumulator{::chargelab::logging::LogLevel::level, ::chargelab::logging::detail::FileName(__FILE__), __LINE__, __func__}; !accumulator.getDone(); accumulator.setDone(true)) \
         accumulator
 #else
 #define CHARGELAB_LOG_MESSAGE(level) \
@@ -188,7 +188,7 @@ namespace chargelab::logging {
 
 #else
 #define CHARGELAB_LOG_MESSAGE(level) \
-    for (::chargelab::NoOpAccumulator accumulator{}; false;) \
+    for (::chargelab::logging::NoOpAccumulator accumulator{}; false;) \
         accumulator
 #endif
 

@@ -6,22 +6,22 @@
 #include <optional>
 #include <limits.h>
 #include <cstdint>
+#include <string_view>
 
 namespace chargelab::string {
     namespace detail {
         char const kHexCharacters[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D' ,'E', 'F'};
     }
 
-    inline bool BeginsWithIgnoreCaseAscii(std::string const& text, std::string const& prefix) {
+    inline bool BeginsWithIgnoreCaseAscii(std::string_view text, std::string_view prefix) {
         if (text.length() < prefix.length())
             return false;
 
         auto text_it = text.begin();
         auto prefix_it = prefix.begin();
         while (prefix_it != prefix.end()) {
-            auto text_ch = *(text_it++);
-            auto prefix_ch = *(prefix_it++);
-            if (std::tolower(text_ch) != std::tolower(prefix_ch)) {
+            if (std::tolower(static_cast<unsigned char>(*(text_it++))) != 
+                std::tolower(static_cast<unsigned char>(*(prefix_it++)))) {
                 return false;
             }
         }
@@ -29,7 +29,7 @@ namespace chargelab::string {
         return true;
     }
 
-    inline bool EqualsIgnoreCaseAscii(std::string const& lhs, std::string const& rhs) {
+    inline bool EqualsIgnoreCaseAscii(std::string_view lhs, std::string_view rhs) {
         return lhs.size() == rhs.size() && BeginsWithIgnoreCaseAscii(lhs, rhs);
     }
 
